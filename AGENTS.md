@@ -205,6 +205,15 @@ tests/QTools.Tests/         14 个测试文件，纯单元 + 内存级集成
 
 回归测试见 `LauncherIndexTests` / `ProgramDedupeTests` / `ShellMathTests` / `UnifiedLauncherBridgeTests` / `tests/app.test.cjs`。
 
+### 7.13 仓库行尾强制 LF（.gitattributes）
+
+历史 bug：GitHub Actions 的 Windows runner checkout 时按全局 `core.autocrlf=true` 把 LF blob 签出成 CRLF，
+内嵌示例工具资源随之变 CRLF，`SampleToolsTests` 三个 LF 断言在 CI 全挂（本地全绿，纯环境差异）。
+
+**约束**：仓库根保留 `.gitattributes`（`* text=auto eol=lf`，png/ico 标 binary），所有文本文件以 LF 提交与签出；
+不要依赖任何人本地的 `core.autocrlf` 配置，也不要删这个文件。CI（`.github/workflows/dotnet-desktop.yml`）
+跑 Release 构建 + 单测 + 前端测试 + AOT 发布 + `--self-test`，push 后以上全部是远端门禁。
+
 ---
 
 ## 8. 平台事实（不要假装全平台都是 WebKit）

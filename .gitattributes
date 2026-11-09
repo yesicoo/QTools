@@ -1,0 +1,6 @@
+# 全仓库统一 LF：Windows runner 的 core.autocrlf 会把 LF 签出成 CRLF，
+# 导致内嵌示例资源变 CRLF、SampleToolsTests 断言失败
+* text=auto eol=lf
+
+*.png binary
+*.ico binary
