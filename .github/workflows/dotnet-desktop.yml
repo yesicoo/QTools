@@ -33,7 +33,8 @@ jobs:
         run: dotnet test -c Release --no-build
 
       - name: Frontend tests
-        run: node --test tests/
+        # 显式列出测试文件：node 22 的 --test 不接受目录参数（会当模块加载）
+        run: node --test tests/app.test.cjs tests/bridge.test.cjs tests/qrcode.test.cjs
 
       - name: Publish AOT single-file
         run: dotnet publish src/QTools.Host/QTools.Host.csproj -c Release -r win-x64 -o publish/win-x64
