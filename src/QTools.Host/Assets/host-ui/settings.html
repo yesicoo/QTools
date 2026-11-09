@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/__host__/icon.png">
+<title>设置 — QTools</title>
+<link rel="stylesheet" href="/__host__/app.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <img class="logo" src="/__host__/icon.png" alt="QTools">
+    <div class="brand-text">
+      <strong>设置</strong>
+      <span>QTools · 运行环境与 AI 接口</span>
+    </div>
+  </div>
+</header>
+
+<main class="main">
+
+  <section class="panel">
+    <h2>运行环境</h2>
+    <dl class="info">
+      <div><dt>平台</dt><dd id="set-platform">…</dd></div>
+      <div><dt>WebView 引擎</dt><dd id="set-webview">…</dd></div>
+      <div><dt>WebView 运行时</dt><dd id="set-webview-version">…</dd></div>
+      <div><dt>本地服务地址</dt><dd id="set-address">…</dd></div>
+      <div><dt>数据目录</dt><dd id="set-datadir" class="mono">…</dd></div>
+      <div><dt>宿主版本</dt><dd id="set-version">…</dd></div>
+    </dl>
+    <p class="hint">本地服务仅绑定 127.0.0.1 并使用随机端口，外部无法访问。</p>
+  </section>
+
+  <section class="panel">
+    <h2>AI 接口</h2>
+    <p class="hint">
+      API Key 只保存在本机系统保护存储中（<span id="ai-secret-mode">…</span>），
+      工具页面无法获取，只能通过 <code>window.host.ai.chat</code> 间接使用。
+    </p>
+    <div class="form">
+      <label>Base URL
+        <input id="ai-baseurl" type="url" required placeholder="https://api.deepseek.com/v1" spellcheck="false">
+      </label>
+      <label>模型
+        <input id="ai-model" type="text" required placeholder="deepseek-chat" spellcheck="false">
+      </label>
+      <div class="form-row">
+        <label>Temperature
+          <input id="ai-temperature" type="number" required min="0" max="2" step="any" value="0.7">
+        </label>
+        <label>超时（秒）
+          <input id="ai-timeout" type="number" required min="1" max="600" step="1" value="60">
+        </label>
+      </div>
+      <label>API Key
+        <input id="ai-key" type="password" placeholder="留空表示不修改" autocomplete="new-password">
+      </label>
+    </div>
+    <div class="row">
+      <button id="ai-save" class="btn primary" type="button">保存配置</button>
+      <button id="ai-clear" class="btn ghost danger" type="button">清除 Key</button>
+      <span id="ai-status" class="badge none">未配置</span>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>全局热键</h2>
+    <p class="hint">开启后在任意位置按 <kbd>Alt</kbd>+<kbd>Space</kbd> 呼出 / 隐藏主窗口（仅 Windows 支持）。</p>
+    <div class="row">
+      <label class="check"><input id="hotkey-enabled" type="checkbox"> 启用 Alt+Space 全局热键</label>
+      <span id="hotkey-status" class="badge none">…</span>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>本机程序索引</h2>
+    <p class="hint">启动时在后台自动索引本机已安装的程序，完成后整体覆盖旧索引；索引期间旧列表仍然可用。</p>
+    <div class="row">
+      <button id="index-rebuild" class="btn ghost" type="button">立即重建索引</button>
+      <span id="index-info" class="hint">…</span>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>备份与恢复</h2>
+    <p class="hint">把程序、工具（含历史版本）、存储数据与配置打包为 zip。恢复前会自动创建安全快照，随时可以再次回滚。</p>
+    <div class="form">
+      <label>备份备注（可选）
+        <input id="backup-note" type="text" maxlength="200" placeholder="例如：大更新之前">
+      </label>
+    </div>
+    <div class="row">
+      <button id="backup-create" class="btn primary" type="button">创建备份</button>
+      <button id="backup-import" class="btn ghost" type="button">导入备份文件…</button>
+      <button id="backup-open-dir" class="btn ghost" type="button">打开备份目录</button>
+      <span id="backup-status" class="hint"></span>
+    </div>
+    <h3>备份列表</h3>
+    <ul id="backup-list" class="versions"></ul>
+  </section>
+
+  <section class="panel">
+    <h2>Git 远程备份</h2>
+    <p class="hint">需要本机已安装 git。把与本地备份相同的内容推送到指定仓库；
+      凭证由 git 自身管理（凭据管理器 / SSH），QTools 不接触、不保存、不记录任何凭证。</p>
+    <div class="form">
+      <label>远程仓库地址
+        <input id="git-url" type="text" spellcheck="false"
+               placeholder="https://github.com/you/qtools-backup.git 或 git@github.com:you/qtools-backup.git">
+      </label>
+    </div>
+    <div class="row">
+      <button id="git-save" class="btn ghost" type="button">保存地址</button>
+      <button id="git-push" class="btn primary" type="button">推送到远程</button>
+      <button id="git-restore" class="btn ghost danger" type="button">从远程恢复</button>
+      <span id="git-status" class="hint"></span>
+    </div>
+    <p class="hint" id="git-last-push"></p>
+    <div id="git-stream" class="stream-box" hidden>
+      <div class="stream-head">
+        <span>执行进度</span>
+        <button id="git-stream-cancel" class="btn ghost sm danger" type="button">取消</button>
+      </div>
+      <pre id="git-stream-text" class="stream-text"></pre>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>关于</h2>
+    <dl class="info">
+      <div><dt>产品</dt><dd>QTools — 个人桌面小工具宿主</dd></div>
+      <div><dt>技术栈</dt><dd>.NET 10 Native AOT · PhotinoX · Kestrel</dd></div>
+    </dl>
+  </section>
+
+</main>
+
+<div id="toast" class="toast" hidden></div>
+<script src="/__host__/settings.js" defer></script>
+</body>
+</html>

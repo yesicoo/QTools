@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="/__host__/icon.png">
+  <title>QTools — 桌面启动器</title>
+  <link rel="stylesheet" href="/__host__/app.css">
+</head>
+<body class="mode-main">
+
+<div class="layout">
+
+  <!-- ============ 左侧栏：品牌 / 搜索 / 列表 / 底部操作 ============ -->
+  <aside class="sidebar">
+    <div class="brand">
+      <img class="logo" src="/__host__/icon.png" alt="QTools">
+      <div class="brand-text">
+        <strong>QTools</strong>
+        <span>桌面启动器 · 小工具宿主</span>
+      </div>
+    </div>
+
+    <div class="search">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M20 20l-3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+      <input id="search" type="search" placeholder="搜索程序或工具…" autocomplete="off">
+    </div>
+
+    <nav class="side-lists">
+      <ul id="nav-list" class="nav-list"></ul>
+    </nav>
+
+    <div class="side-foot" id="side-empty" hidden>没有匹配的条目</div>
+    <div class="index-status" id="index-status"></div>
+
+    <div class="side-actions">
+      <button id="create-tool" class="btn ghost block" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.9 4.6L18.5 9l-3.4 3.3.8 4.7L12 14.8 8.1 17l.8-4.7L5.5 9l4.6-1.4L12 3z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
+        AI 创建
+      </button>
+      <button id="import-tool" class="btn ghost block" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m0 0L8 8m4-4l4 4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        导入工具
+      </button>
+      <button id="open-settings" class="btn ghost block span2" type="button" title="设置">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M19.4 15a1.7 1.7 0 00.34 1.87l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.7 1.7 0 00-1.87-.34 1.7 1.7 0 00-1.03 1.56V21a2 2 0 11-4 0v-.09a1.7 1.7 0 00-1.11-1.56 1.7 1.7 0 00-1.87.34l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.7 1.7 0 00.34-1.87 1.7 1.7 0 00-1.56-1.03H3a2 2 0 110-4h.09a1.7 1.7 0 001.56-1.11 1.7 1.7 0 00-.34-1.87l-.06-.06a2 2 0 112.83-2.83l.06.06a1.7 1.7 0 001.87.34H9a1.7 1.7 0 001.03-1.56V3a2 2 0 114 0v.09a1.7 1.7 0 001.03 1.56 1.7 1.7 0 001.87-.34l.06-.06a2 2 0 112.83 2.83l-.06.06a1.7 1.7 0 00-.34 1.87V9a1.7 1.7 0 001.56 1.03H21a2 2 0 110 4h-.09a1.7 1.7 0 00-1.56 1.03z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
+        设置
+      </button>
+    </div>
+  </aside>
+
+  <!-- ============ 右侧内容区 ============ -->
+  <main class="content">
+
+    <!-- 内嵌工具 -->
+    <div id="tool-view" class="tool-view" hidden>
+      <div class="tool-bar">
+        <div class="tool-title">
+          <span id="tool-glyph" class="tool-glyph">◆</span>
+          <div class="tool-name-wrap">
+            <strong id="tool-name">工具</strong>
+            <span id="tool-meta"></span>
+          </div>
+        </div>
+        <div class="tool-actions">
+          <button id="tool-window" class="btn ghost sm" type="button" title="在独立窗口中打开（需要摄像头等能力的工具用这个）">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h18v14H3zM8 5v14M3 9h5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+            独立窗口
+          </button>
+          <button id="tool-reload" class="btn ghost sm" type="button">刷新</button>
+          <button id="tool-versions" class="btn ghost sm" type="button">版本管理</button>
+          <button id="tool-delete" class="btn ghost sm danger" type="button">删除</button>
+          <button id="tool-close" class="btn ghost sm" type="button">收起</button>
+        </div>
+      </div>
+      <div class="tool-frame-wrap">
+        <iframe id="tool-frame" title="工具页面"></iframe>
+      </div>
+    </div>
+
+    <!-- 内容窗口空状态 -->
+    <div id="content-home" class="empty" hidden>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h6v6H4zM14 5h6v6h-6zM4 13h6v6H4zM14 13h6v6h-6z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>
+      <h3>从主窗口列表选择一个工具</h3>
+      <p>点击主窗口列表里的「小工具」会在这个窗口打开；「本机程序」点击直接启动。</p>
+      <p>也可以用主窗口底部的按钮导入或用 AI 创建新工具。</p>
+    </div>
+
+    <!-- AI 创建工具 -->
+    <section id="create-view" class="panel" hidden>
+      <div class="panel-head">
+        <h2>用自然语言创建工具</h2>
+        <button id="create-cancel" class="btn ghost sm" type="button">取消</button>
+      </div>
+      <p class="hint">描述你想要的功能即可，QTools 会自动附上工具宿主的规范（单文件 HTML 便于导入导出、中文界面、桥接存储等）再交给 AI 生成
+        <code>manifest.json</code> 与页面，经安全审查并由你确认后保存。</p>
+      <textarea id="create-prompt" rows="3" placeholder="例如：做一个待办清单，能添加、勾选、删除，数据保存在本地。"></textarea>
+      <div class="row">
+        <button id="create-generate" class="btn primary" type="button">生成</button>
+        <span id="create-status" class="hint"></span>
+      </div>
+
+      <div id="create-stream" class="stream-box" hidden>
+        <div class="stream-head">
+          <span>AI 实时输出（原始内容）</span>
+          <button id="create-stream-cancel" class="btn ghost sm danger" type="button">取消生成</button>
+        </div>
+        <pre id="create-stream-text" class="stream-text"></pre>
+      </div>
+
+      <div id="create-result" hidden>
+        <h3>安全审查</h3>
+        <ul id="create-findings" class="findings"></ul>
+        <div class="split">
+          <div><h3>manifest.json</h3><pre id="create-manifest" class="code"></pre></div>
+          <div><h3>index.html</h3><pre id="create-html" class="code"></pre></div>
+        </div>
+        <div class="row">
+          <label class="check"><input id="create-accept" type="checkbox"> 我已审查上述内容，确认保存</label>
+          <button id="create-save" class="btn primary" type="button">保存</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- 版本管理 -->
+    <section id="version-view" class="panel" hidden>
+      <div class="panel-head">
+        <h2 id="version-title">版本管理</h2>
+        <button id="version-close" class="btn ghost sm" type="button">关闭</button>
+      </div>
+      <p class="hint" id="version-subtitle">每个工具都可以选择运行哪个版本，更新前会自动备份当前版本，随时可以回滚。</p>
+
+      <div class="row" style="margin-bottom:14px">
+        <button id="version-update" class="btn primary" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v3m0 12v3M5.6 5.6l2.1 2.1m8.6 8.6l2.1 2.1M3 12h3m12 0h3M5.6 18.4l2.1-2.1m8.6-8.6l2.1-2.1" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          AI 优化更新
+        </button>
+        <span id="version-status" class="hint"></span>
+      </div>
+
+      <div id="update-form" hidden>
+        <label class="form-label">想怎么改？
+          <textarea id="update-instruction" rows="3" placeholder="例如：加上深色模式；把按钮调大一点；增加导出 CSV 功能"></textarea>
+        </label>
+        <div class="row">
+          <label class="check">版本递增
+            <select id="update-bump">
+              <option value="patch">补丁 1.0.0 → 1.0.1</option>
+              <option value="minor">次版本 1.0.0 → 1.1.0</option>
+              <option value="major">主版本 1.0.0 → 2.0.0</option>
+            </select>
+          </label>
+          <button id="update-generate" class="btn primary" type="button">生成新版本</button>
+          <button id="update-cancel" class="btn ghost" type="button">取消</button>
+        </div>
+
+        <div id="update-stream" class="stream-box" hidden>
+          <div class="stream-head">
+            <span>AI 实时输出（原始内容）</span>
+            <button id="update-stream-cancel" class="btn ghost sm danger" type="button">取消生成</button>
+          </div>
+          <pre id="update-stream-text" class="stream-text"></pre>
+        </div>
+
+        <div id="update-result" hidden>
+          <h3>安全审查</h3>
+          <ul id="update-findings" class="findings"></ul>
+          <div class="split">
+            <div><h3>manifest.json</h3><pre id="update-manifest" class="code"></pre></div>
+            <div><h3>index.html</h3><pre id="update-html" class="code"></pre></div>
+          </div>
+          <div class="row">
+            <label class="check"><input id="update-accept" type="checkbox"> 我已审查上述内容，确认应用</label>
+            <button id="update-apply" class="btn primary" type="button">应用并切换到此版本</button>
+          </div>
+        </div>
+      </div>
+
+      <h3>历史版本</h3>
+      <ul id="version-list" class="versions"></ul>
+    </section>
+
+    <!-- 导入本地 HTML -->
+    <section id="import-view" class="panel" hidden>
+      <div class="panel-head">
+        <h2>导入本地 HTML 工具</h2>
+        <button id="import-cancel" class="btn ghost sm" type="button">取消</button>
+      </div>
+      <p class="hint">选择一个 HTML 文件并给它起个名字。权限会按代码实际用法<b>自动检测</b>，不需要你手动填写。</p>
+
+      <div class="form">
+        <label>HTML 文件
+          <div class="file-picker">
+            <input id="import-file" type="file" accept=".html,.htm,text/html">
+            <span id="import-file-name" class="file-name">未选择文件</span>
+          </div>
+        </label>
+        <label>工具名称
+          <input id="import-name" type="text" maxlength="60" placeholder="例如：我的计算器">
+        </label>
+        <label>描述（可选）
+          <input id="import-desc" type="text" maxlength="300" placeholder="一句话说明这个工具做什么">
+        </label>
+      </div>
+
+      <div class="row">
+        <button id="import-run" class="btn primary" type="button">导入</button>
+        <span id="import-status" class="hint"></span>
+      </div>
+
+      <div id="import-review" hidden>
+        <h3>安全审查</h3>
+        <ul id="import-findings" class="findings"></ul>
+        <dl class="info">
+          <div><dt>工具 ID</dt><dd id="import-toolid" class="mono">—</dd></div>
+          <div><dt>自动检测权限</dt><dd id="import-perms">—</dd></div>
+        </dl>
+        <div id="import-assets-warning" class="warnbox" hidden></div>
+        <div class="row">
+          <button id="import-confirm" class="btn primary" type="button">确认导入</button>
+          <button id="import-abort" class="btn ghost" type="button">放弃</button>
+        </div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<div id="toast" class="toast" hidden></div>
+<script src="/__host__/app.js" defer></script>
+</body>
+</html>

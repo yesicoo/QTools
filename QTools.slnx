@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/QTools.Host/QTools.Host.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/QTools.Tests/QTools.Tests.csproj" />
+  </Folder>
+</Solution>

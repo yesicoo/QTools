@@ -1,0 +1,20 @@
+# .NET
+bin/
+obj/
+*.user
+*.suo
+.vs/
+.idea/
+
+# 运行期数据（tools/ 仅保留 .gitkeep，示例工具由宿主首次启动从内嵌资源释放）
+data/
+tools/*
+!tools/.gitkeep
+
+# 发布输出
+publish/
+artifacts/
+
+# 日志与临时文件
+*.log
+*.tmp

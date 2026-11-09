@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JSON 格式化</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 18px; display: grid; gap: 12px;
+    font: 13.5px/1.6 "Segoe UI", "PingFang SC", system-ui, sans-serif;
+  }
+  h1 { font-size: 17px; margin: 0; }
+  .sub { color: #6b7280; font-size: 12.5px; margin: 0 0 4px; }
+  .bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  button {
+    font: inherit; padding: 6px 13px; border-radius: 7px; cursor: pointer;
+    border: 1px solid #4f46e5; background: #4f46e5; color: #fff;
+  }
+  button.ghost { background: transparent; color: inherit; border-color: #8886; }
+  textarea {
+    width: 100%; min-height: 300px; padding: 11px; border-radius: 9px; resize: vertical;
+    border: 1px solid #8884; background: rgba(127,127,127,.08); color: inherit;
+    font-family: Consolas, "Cascadia Mono", monospace; font-size: 12.5px; tab-size: 2;
+  }
+  textarea:focus { outline: 2px solid #6366f1; outline-offset: -1px; }
+  #status { font-size: 12.5px; min-height: 1.4em; }
+  #status.ok { color: #047857; }
+  #status.err { color: #dc2626; }
+  .meta { font-size: 12px; color: #6b7280; }
+  .perm { font-size: 11.5px; color: #9aa1ab; }
+</style>
+</head>
+<body>
+<h1>JSON 格式化</h1>
+<p class="sub">纯本地处理，不联网、不存储任何数据。<span class="perm">（本工具未声明任何权限）</span></p>
+
+<div class="bar">
+  <button id="fmt" type="button">格式化</button>
+  <button id="min" class="ghost" type="button">压缩</button>
+  <button id="clr" class="ghost" type="button">清空</button>
+  <button id="cpy" class="ghost" type="button">复制结果</button>
+  <label style="font-size:12.5px;color:#6b7280">缩进
+    <select id="indent">
+      <option value="2">2 空格</option>
+      <option value="4">4 空格</option>
+      <option value="\t">Tab</option>
+    </select>
+  </label>
+</div>
+
+<textarea id="in" spellcheck="false" placeholder='{"hello":"world","list":[1,2,3]}'></textarea>
+<div id="status"></div>
+<div class="meta" id="meta"></div>
+<textarea id="out" spellcheck="false" readonly placeholder="结果会显示在这里"></textarea>
+
+<script>
+(function () {
+  "use strict";
+  var $ = function (id) { return document.getElementById(id); };
+
+  function setStatus(text, isError) {
+    var el = $("status");
+    el.textContent = text;
+    el.className = isError ? "err" : (text ? "ok" : "");
+  }
+
+  function indentValue() {
+    var v = $("indent").value;
+    return v === "\\t" ? "\t" : parseInt(v, 10);
+  }
+
+  function transform(mode) {
+    var raw = $("in").value;
+    if (!raw.trim()) { setStatus("请输入 JSON", true); return; }
+
+    var parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (e) {
+      // 提取行列信息，帮助定位
+      var m = /position (\d+)/.exec(e.message);
+      var extra = "";
+      if (m) {
+        var pos = parseInt(m[1], 10);
+        var before = raw.slice(0, pos);
+        var line = before.split("\n").length;
+        var col = pos - before.lastIndexOf("\n");
+        extra = "（第 " + line + " 行，第 " + col + " 列）";
+      }
+      setStatus("JSON 语法错误" + extra + "：" + e.message, true);
+      $("out").value = "";
+      $("meta").textContent = "";
+      return;
+    }
+
+    var result;
+    try {
+      result = mode === "min" ? JSON.stringify(parsed) : JSON.stringify(parsed, null, indentValue());
+    } catch (e) {
+      setStatus("序列化失败：" + e.message, true);
+      return;
+    }
+
+    $("out").value = result;
+    setStatus(mode === "min" ? "已压缩" : "已格式化", false);
+    $("meta").textContent = "原始 " + raw.length + " 字符 → 结果 " + result.length +
+      " 字符 · 顶层类型 " + (Array.isArray(parsed) ? "Array" : typeof parsed);
+  }
+
+  $("fmt").addEventListener("click", function () { transform("fmt"); });
+  $("min").addEventListener("click", function () { transform("min"); });
+  $("clr").addEventListener("click", function () {
+    $("in").value = ""; $("out").value = ""; $("meta").textContent = ""; setStatus("");
+    $("in").focus();
+  });
+  $("cpy").addEventListener("click", function () {
+    var v = $("out").value;
+    if (!v) { setStatus("没有可复制的结果", true); return; }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(v).then(function () { setStatus("已复制到剪贴板", false); },
+        function () { setStatus("复制失败，请手动选择复制", true); });
+    } else {
+      $("out").select();
+      setStatus("已选中，请按 Ctrl+C 复制", false);
+    }
+  });
+})();
+</script>
+</body>
+</html>

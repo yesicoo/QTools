@@ -1,0 +1,149 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>QTools.Host</RootNamespace>
+    <AssemblyName>QTools</AssemblyName>
+    <!--  exe 文件图标（资源管理器 / 任务栏兜底）；窗口图标由 ShellHost 用解压的 icon.ico 设置 -->
+    <ApplicationIcon>Assets\brand\icon.ico</ApplicationIcon>
+    <!-- 开发机默认 RID（Windows）；发布其他平台用 -r &lt;rid&gt; 覆盖 -->
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <!-- 发布形态：Native AOT + 自包含单文件（PhotinoX 原生库随单文件解压） -->
+    <PublishAot>true</PublishAot>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <SelfContained>true</SelfContained>
+    <!-- Release 不带 PDB：AOT 的 PDB 体积可能是 exe 的数倍 -->
+    <DebugType Condition="'$(Configuration)' == 'Release'">none</DebugType>
+    <!-- 发布剪裁：体积优先。代码仅用 InvariantCulture/序数比较，全球化可不变；
+         桌面自托管不用分布式追踪/指标/HTTP3；框架异常文案换资源键（自有中文错误文案不受影响） -->
+    <OptimizationPreference Condition="'$(Configuration)' == 'Release'">Size</OptimizationPreference>
+    <IlcFoldIdenticalMethodBodies Condition="'$(Configuration)' == 'Release'">true</IlcFoldIdenticalMethodBodies>
+    <InvariantGlobalization Condition="'$(Configuration)' == 'Release'">true</InvariantGlobalization>
+    <UseSystemResourceKeys Condition="'$(Configuration)' == 'Release'">true</UseSystemResourceKeys>
+    <HttpActivityPropagationSupport Condition="'$(Configuration)' == 'Release'">false</HttpActivityPropagationSupport>
+    <MetricsSupport Condition="'$(Configuration)' == 'Release'">false</MetricsSupport>
+    <DebuggerSupport Condition="'$(Configuration)' == 'Release'">false</DebuggerSupport>
+    <Http3Support Condition="'$(Configuration)' == 'Release'">false</Http3Support>
+    <!-- 极限剪裁：堆栈仅 dev 详细日志使用且已判空；异常类型+消息仍保留 -->
+    <StackTraceSupport Condition="'$(Configuration)' == 'Release'">false</StackTraceSupport>
+    <IlcGenerateStackTraceData Condition="'$(Configuration)' == 'Release'">false</IlcGenerateStackTraceData>
+    <NullabilityInfoContextSupport Condition="'$(Configuration)' == 'Release'">false</NullabilityInfoContextSupport>
+    <EventSourceSupport Condition="'$(Configuration)' == 'Release'">false</EventSourceSupport>
+    <EnableUnsafeUTF7Encoding Condition="'$(Configuration)' == 'Release'">false</EnableUnsafeUTF7Encoding>
+    <!-- 架构红线：AOT 下反射式 JSON 不可用，从特性开关上直接禁用（误用立即抛异常而非静默降级） -->
+    <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
+    <SatelliteResourceLanguages>zh-Hans;en</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Windows DPAPI：当前用户作用域的系統级密钥保护 -->
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 宿主自带 Kestrel：用框架引用引入 ASP.NET Core（无需 Web SDK 的网站约定） -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 唯一外部依赖：PhotinoX（Photino.NET 维护分叉）+ PhotinoX.Native -->
+    <PackageReference Include="PhotinoX" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 让测试项目访问 internal 成员（PayloadReader 等校验规则）；AOT 安全，仅元数据属性 -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
+      <_Parameter1>QTools.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      宿主管理界面与示例工具全部内嵌，保证单文件自包含。
+      注意：MSBuild 默认会把目录名中的 '-' 换成 '_'（host-ui → host_ui），
+      因此 HostAssetEndpoint 不硬编码资源名，而是启动时枚举自建映射表。
+    -->
+    <EmbeddedResource Include="Assets\**" />
+
+    <!--
+      把当前 RID 的 PhotinoX 原生库内嵌进程序集（守住「自包含单文件」）。
+      原因（已实测）：.NET 10 Native AOT 的单文件发布不会把原生库打进 exe，
+      无论是否设置 IncludeNativeLibrariesForSelfExtract。因此自建
+      「内嵌资源 -> 启动时解压到 data/native/{rid} -> DllImportResolver」链路。
+      Debug 内嵌原始文件；Release 由 CompressEmbeddedPhotinoNatives 目标改为
+      内嵌 Deflate 压缩版（QTools.nativez.*），进一步缩小单文件体积。
+    -->
+    <EmbeddedResource Condition="'$(Configuration)' != 'Release'" Include="$(NuGetPackageRoot)photinox.native/*/runtimes/$(RuntimeIdentifier)/native/*">
+      <LogicalName>QTools.native.%(Filename)%(Extension)</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+
+  <!-- Release 极限剪裁：原生库先 Deflate 压缩再内嵌（格式：4 字节小端原始长度 + 压缩数据），
+       启动时由 NativeLibraries 解压并校验长度。压缩在构建期完成，运行期只付解压成本 -->
+  <UsingTask TaskName="QToolsCompressNative" TaskFactory="RoslynCodeTaskFactory" AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <SourceFile ParameterType="System.String" Required="true" />
+      <DestinationFile ParameterType="System.String" Required="true" />
+    </ParameterGroup>
+    <Task>
+      <Using Namespace="System.IO" />
+      <Using Namespace="System.IO.Compression" />
+      <Code Type="Fragment" Language="C#"><![CDATA[
+        if (File.Exists(DestinationFile) &&
+            File.GetLastWriteTimeUtc(DestinationFile) >= File.GetLastWriteTimeUtc(SourceFile))
+        {
+            return true;
+        }
+        Directory.CreateDirectory(Path.GetDirectoryName(DestinationFile));
+        using (var input = File.OpenRead(SourceFile))
+        using (var output = File.Create(DestinationFile))
+        {
+            var length = (int)input.Length;
+            output.WriteByte((byte)length);
+            output.WriteByte((byte)(length >> 8));
+            output.WriteByte((byte)(length >> 16));
+            output.WriteByte((byte)(length >> 24));
+            using (var deflate = new DeflateStream(output, CompressionLevel.Optimal, leaveOpen: true))
+            {
+                input.CopyTo(deflate);
+            }
+        }
+      ]]></Code>
+    </Task>
+  </UsingTask>
+
+  <Target Name="CompressEmbeddedPhotinoNatives" BeforeTargets="AssignTargetPaths" Condition="'$(Configuration)' == 'Release'">
+    <ItemGroup>
+      <_QToolsNativeRaw Include="$(NuGetPackageRoot)photinox.native/*/runtimes/$(RuntimeIdentifier)/native/*" />
+    </ItemGroup>
+    <QToolsCompressNative SourceFile="%(_QToolsNativeRaw.Identity)" DestinationFile="$(IntermediateOutputPath)nativez\%(_QToolsNativeRaw.Filename)%(_QToolsNativeRaw.Extension)" />
+    <ItemGroup>
+      <EmbeddedResource Include="@(_QToolsNativeRaw->'$(IntermediateOutputPath)nativez\%(Filename)%(Extension)')">
+        <LogicalName>QTools.nativez.%(Filename)%(Extension)</LogicalName>
+      </EmbeddedResource>
+    </ItemGroup>
+  </Target>
+
+  <!-- 发布剪裁：PhotinoX 原生库已内嵌并启动时解压，IIS 进程内组件桌面自托管不用，
+       这些 sidecar 留在发布目录纯属冗余（单 exe 已实测可独立运行） -->
+  <Target Name="RemoveRedundantPublishSidecars" AfterTargets="Publish">
+    <ItemGroup>
+      <_QToolsRedundantSidecar Include="$(PublishDir)*PhotinoX.Native.*;$(PublishDir)*WebView2Loader.*;$(PublishDir)aspnetcorev2_inprocess.dll" />
+    </ItemGroup>
+    <Delete Files="@(_QToolsRedundantSidecar)" />
+    <Message Condition="'@(_QToolsRedundantSidecar)' != ''" Importance="high"
+             Text="已移除冗余发布 sidecar：@(_QToolsRedundantSidecar->'%(Filename)%(Extension)', '、')" />
+  </Target>
+
+  <!-- 原生库没嵌进去就立刻失败：绝不允许静默发布出一个跑不起来的单文件 -->
+  <Target Name="ValidateEmbeddedPhotinoNatives" BeforeTargets="CoreCompile">
+    <ItemGroup>
+      <_QToolsNativeLib Include="$(NuGetPackageRoot)photinox.native/*/runtimes/$(RuntimeIdentifier)/native/*" />
+    </ItemGroup>
+    <Error Condition="'@(_QToolsNativeLib)' == ''"
+           Text="未找到 PhotinoX 原生库（$(NuGetPackageRoot)photinox.native/*/runtimes/$(RuntimeIdentifier)/native/）。请确认 NuGet 包缓存中已还原 photinox.native，且 RuntimeIdentifier 已正确设置。" />
+  </Target>
+
+</Project>

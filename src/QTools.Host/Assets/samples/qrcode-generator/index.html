@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>二维码生成</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 18px; display: grid; gap: 14px;
+    font: 13.5px/1.6 "Segoe UI", "PingFang SC", system-ui, sans-serif;
+  }
+  h1 { font-size: 17px; margin: 0; }
+  .sub { color: #6b7280; font-size: 12.5px; margin: 0; }
+  label { display: grid; gap: 5px; font-size: 12.5px; color: #6b7280; }
+  textarea, input[type=number] {
+    font: inherit; padding: 9px 11px; border-radius: 8px; resize: vertical;
+    border: 1px solid #8884; background: rgba(127,127,127,.08); color: inherit;
+  }
+  textarea { min-height: 74px; font-family: Consolas, monospace; font-size: 12.5px; }
+  .bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  button {
+    font: inherit; padding: 6px 13px; border-radius: 7px; cursor: pointer;
+    border: 1px solid #4f46e5; background: #4f46e5; color: #fff;
+  }
+  button.ghost { background: transparent; color: inherit; border-color: #8886; }
+  #qr-wrap { display: grid; place-items: center; min-height: 220px; }
+  canvas { border-radius: 10px; background: #fff; max-width: 100%; }
+  #status { font-size: 12.5px; min-height: 1.4em; }
+  #status.err { color: #dc2626; }
+  #status.ok { color: #047857; }
+  .meta { font-size: 12px; color: #6b7280; }
+  .history { display: grid; gap: 6px; }
+  .history h3 { font-size: 13px; margin: 0; color: #6b7280; }
+  .history ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 5px; }
+  .history li { display: flex; gap: 8px; align-items: center; }
+  .history li span {
+    flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-size: 12.5px; padding: 5px 9px; border-radius: 7px; background: rgba(127,127,127,.1);
+    cursor: pointer;
+  }
+  .history li button { padding: 3px 9px; font-size: 12px; }
+  .opt { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+  .opt label { display: flex; align-items: center; gap: 6px; }
+</style>
+</head>
+<body>
+<h1>二维码生成</h1>
+<p class="sub">纯本地编码，不联网。内容通过宿主存储保存最近记录。</p>
+
+<label>内容
+  <textarea id="text" spellcheck="false" placeholder="输入文本或链接，例如 https://example.com"></textarea>
+</label>
+
+<div class="opt">
+  <label>尺寸 <input id="size" type="number" min="120" max="640" step="20" value="320" style="width:90px"></label>
+  <label><input id="history-on" type="checkbox" checked> 记住最近记录</label>
+</div>
+
+<div class="bar">
+  <button id="gen" type="button">生成</button>
+  <button id="dl" class="ghost" type="button">下载 PNG</button>
+</div>
+
+<div id="status"></div>
+<div id="qr-wrap"><canvas id="qr" width="320" height="320" hidden></canvas></div>
+<div class="meta" id="meta"></div>
+
+<div class="history">
+  <h3>最近记录</h3>
+  <ul id="history-list"></ul>
+</div>
+
+<script src="qrcode.js"></script>
+<script>
+(function () {
+  "use strict";
+  var $ = function (id) { return document.getElementById(id); };
+  var host = window.host;
+  var HISTORY_KEY = "history";
+  var HISTORY_MAX = 8;
+
+  function status(text, isError) {
+    var el = $("status");
+    el.textContent = text;
+    el.className = isError ? "err" : (text ? "ok" : "");
+  }
+
+  /* ---------- 渲染 ---------- */
+  function render() {
+    var text = $("text").value;
+    var canvas = $("qr");
+    canvas.hidden = true;
+    $("meta").textContent = "";
+    if (!text.trim()) { status("请输入内容", true); return; }
+
+    var size = Math.max(120, Math.min(640, parseInt($("size").value, 10) || 320));
+
+    try {
+      QRCoder.toCanvas(canvas, text, size);
+      canvas.hidden = false;
+      status("已生成", false);
+      $("meta").textContent = "版本 " + QRCoder.lastVersion + " · 模块 " + QRCoder.lastModules +
+        " × " + QRCoder.lastModules + " · 尺寸 " + canvas.width + " px";
+      if ($("history-on").checked) { saveHistory(text); }
+    } catch (e) {
+      canvas.hidden = true;
+      status("生成失败：" + e.message, true);
+      $("meta").textContent = "";
+    }
+  }
+
+  /* ---------- 历史记录（宿主存储） ---------- */
+  function saveHistory(text) {
+    if (!host) { return; }
+    host.storage.get(HISTORY_KEY).then(function (r) {
+      var list = (r && r.found && Array.isArray(r.value)) ? r.value.slice() : [];
+      list = list.filter(function (t) { return t !== text; });
+      list.unshift(text);
+      if (list.length > HISTORY_MAX) { list = list.slice(0, HISTORY_MAX); }
+      return host.storage.set(HISTORY_KEY, list);
+    }).then(renderHistory, function () { /* 存储失败不影响主流程 */ });
+  }
+
+  function renderHistory() {
+    if (!host) { return; }
+    host.storage.get(HISTORY_KEY).then(function (r) {
+      var ul = $("history-list");
+      ul.innerHTML = "";
+      var list = (r && r.found && Array.isArray(r.value)) ? r.value : [];
+      if (list.length === 0) {
+        var li = document.createElement("li");
+        li.innerHTML = "<span style='cursor:default;color:#9aa1ab'>暂无记录</span>";
+        ul.appendChild(li);
+        return;
+      }
+      list.forEach(function (text) {
+        var li = document.createElement("li");
+        var span = document.createElement("span");
+        span.textContent = text;
+        span.title = text;
+        span.addEventListener("click", function () { $("text").value = text; render(); });
+        var del = document.createElement("button");
+        del.type = "button";
+        del.className = "ghost";
+        del.textContent = "删除";
+        del.addEventListener("click", function () {
+          host.storage.get(HISTORY_KEY).then(function (res) {
+            var arr = (res && res.found && Array.isArray(res.value)) ? res.value.slice() : [];
+            arr = arr.filter(function (t) { return t !== text; });
+            return host.storage.set(HISTORY_KEY, arr);
+          }).then(renderHistory, function () {});
+        });
+        li.appendChild(span);
+        li.appendChild(del);
+        ul.appendChild(li);
+      });
+    }, function () { /* 忽略 */ });
+  }
+
+  /* ---------- 事件 ---------- */
+  $("gen").addEventListener("click", render);
+  $("dl").addEventListener("click", function () {
+    var canvas = $("qr");
+    if (canvas.hidden) { status("请先生成二维码", true); return; }
+    var link = document.createElement("a");
+    link.download = "qrcode.png";
+    link.href = canvas.toDataURL("image/png");
+    link.click();
+    status("已下载 PNG", false);
+  });
+
+  renderHistory();
+})();
+</script>
+</body>
+</html>

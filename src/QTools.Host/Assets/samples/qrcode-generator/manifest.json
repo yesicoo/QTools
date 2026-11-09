@@ -1,0 +1,12 @@
+{
+  "id": "qrcode-generator",
+  "name": "二维码生成",
+  "version": "1.0.0",
+  "description": "把文本或链接生成二维码，可保存最近记录",
+  "entry": "index.html",
+  "permissions": ["storage"],
+  "window": { "width": 620, "height": 780, "resizable": true },
+  "createdAt": "2026-11-04T00:00:00+08:00",
+  "allowEval": false,
+  "csp": null
+}

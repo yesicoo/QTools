@@ -1,0 +1,12 @@
+{
+  "id": "json-formatter",
+  "name": "JSON 格式化",
+  "version": "1.0.0",
+  "description": "格式化 / 压缩 / 校验 JSON，支持语法错误定位",
+  "entry": "index.html",
+  "permissions": [],
+  "window": { "width": 720, "height": 760, "resizable": true },
+  "createdAt": "2026-11-04T00:00:00+08:00",
+  "allowEval": false,
+  "csp": null
+}
