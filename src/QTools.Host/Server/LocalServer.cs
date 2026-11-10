@@ -70,6 +70,12 @@ internal sealed partial class LocalServer : IDisposable
     /// <summary>启动项存储。</summary>
     public Launcher.AppStore AppStore { get; }
 
+    /// <summary>在线工具注册表（录入的网址）。</summary>
+    public Launcher.WebToolRegistry WebTools { get; }
+
+    /// <summary>在线工具存储。</summary>
+    public Launcher.WebToolStore WebToolStore { get; }
+
     /// <summary>本机程序扫描器。</summary>
     public Launcher.ProgramDiscovery Discovery { get; }
 
@@ -78,6 +84,9 @@ internal sealed partial class LocalServer : IDisposable
 
     /// <summary>使用频次统计。</summary>
     public Launcher.UsageStore Usage { get; }
+
+    /// <summary>索引程序隐藏列表（右键「从列表隐藏」）。</summary>
+    public Launcher.HiddenProgramStore HiddenPrograms { get; }
 
     /// <summary>本地备份服务。</summary>
     public Backup.BackupService Backup { get; }
@@ -113,6 +122,13 @@ internal sealed partial class LocalServer : IDisposable
             Discovery,
             QTools.Host.Configuration.AppPaths.IconCacheDirectory);
         Usage = new Launcher.UsageStore(QTools.Host.Configuration.AppPaths.UsageFilePath);
+        HiddenPrograms = new Launcher.HiddenProgramStore(
+            QTools.Host.Configuration.AppPaths.HiddenProgramsFilePath);
+
+        var webToolsRoot = QTools.Host.Configuration.AppPaths.WebToolsDirectory;
+        WebTools = new Launcher.WebToolRegistry(webToolsRoot);
+        WebTools.Rescan();
+        WebToolStore = new Launcher.WebToolStore(WebTools, webToolsRoot);
 
         Backup = new Backup.BackupService(QTools.Host.Configuration.AppPaths.RootDirectory);
         GitBackup = new Backup.GitBackup(
@@ -122,7 +138,7 @@ internal sealed partial class LocalServer : IDisposable
 
         Dispatcher = new BridgeDispatcher(
             Tools, Storage, Ai, Secrets, Creator, Importer, Apps, Launcher, AppStore, Discovery,
-            Backup, GitBackup, ProgramIndex, Usage);
+            Backup, GitBackup, ProgramIndex, Usage, WebTools, WebToolStore, HiddenPrograms);
     }
 
     public int Port => _port;

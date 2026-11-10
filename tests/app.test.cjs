@@ -43,6 +43,10 @@ class Element {
     };
   }
   hasClass(name) { return this.className.split(/\s+/).includes(name); }
+  contains(node) {
+    const walk = n => n ? [n, ...n.children.flatMap(walk)] : [];
+    return walk(this).includes(node);
+  }
   set innerHTML(value) { this.html = value; this.children = []; }
   get innerHTML() { return this.html || ''; }
   appendChild(child) { this.children.push(child); return child; }
@@ -117,11 +121,16 @@ async function setup(options = {}) {
   };
   const versions = async () => { click('tool-versions'); await reply('listVersions', { versions: [] }); };
   const view_ = id => {
-    for (const name of ['tool-view', 'content-home', 'create-view', 'version-view', 'import-view']) {
+    for (const name of ['tool-view', 'content-home', 'create-view', 'version-view', 'import-view', 'web-view']) {
       assert.equal(el(name).hidden, name !== id, `视图状态错误：${name}`);
     }
   };
   const fireWindow = (event, arg) => (windowHandlers[event] || []).forEach(handler => handler(arg));
+  const fireDocument = (event, arg) => (documentHandlers[event] || []).forEach(handler => handler(arg));
+  /* 右键原位菜单：条目按钮是 li.children[0]，菜单是 li 里带 .nav-menu 的兄弟节点 */
+  const liOf = key => nodes['nav-list'].children.find(li => li.children[0] === navItem(key));
+  const menuOf = li => li.children.find(c => c.hasClass('nav-menu'));
+  const menuAction = (li, index) => menuOf(li).children[0].children[index];
   nodes['update-bump'].value = 'patch';
   vm.runInNewContext(source, {
     window: {
@@ -143,7 +152,7 @@ async function setup(options = {}) {
   } else {
     await reply('launcherList', { items: list, index: indexInfo });
   }
-  return { el, click, navItem, requests, last, reply, embed, versions, view: view_, fireWindow, body, nodes };
+  return { el, click, navItem, requests, last, reply, embed, versions, view: view_, fireWindow, fireDocument, liOf, menuOf, menuAction, body, nodes };
 }
 
 /* ================= 主窗口：统一列表 ================= */
@@ -251,24 +260,168 @@ test('launcher-changed 与 focus 事件都触发主窗口刷新', async () => {
   assert.equal(h.requests('launcherList').length, 3);
 });
 
-test('右键本机程序移除启动项（不卸载系统程序）', async () => {
+test('右键本机程序：原位菜单「移除」走 deleteApp', async () => {
   const h = await setup();
   let prevented = false;
   h.navItem('app:editor').fire('contextmenu', { preventDefault() { prevented = true; } });
   assert.ok(prevented);
+  const li = h.liOf('app:editor');
+  const btn = h.navItem('app:editor');
+  const menu = h.menuOf(li);
+  assert.ok(menu, '右键后应出现原位菜单');
+  assert.equal(btn.hidden, true);
+  assert.equal(menu.hidden, false);
+  h.menuAction(li, 2).click();
   assert.deepEqual(plain(h.last('deleteApp').payload), { appId: 'editor' });
   await h.reply('deleteApp', { ok: true });
   assert.match(h.el('toast').textContent, /已移除 编辑器/);
   assert.equal(h.requests('launcherList').length, 2);
 });
 
-test('右键小工具删除工具并刷新列表', async () => {
+test('右键索引程序：原位菜单「隐藏」走 hideProgram', async () => {
+  const h = await setup();
+  let prevented = false;
+  h.navItem('program:idx-x').fire('contextmenu', { preventDefault() { prevented = true; } });
+  assert.ok(prevented);
+  const li = h.liOf('program:idx-x');
+  h.menuAction(li, 2).click();
+  assert.deepEqual(plain(h.last('hideProgram').payload), { programId: 'idx-x' });
+  await h.reply('hideProgram', { ok: true });
+  assert.match(h.el('toast').textContent, /已隐藏 索引程序/);
+  assert.equal(h.requests('launcherList').length, 2);
+});
+
+test('在线工具：点击独立窗口打开，原位菜单「打开网址/删除」', async () => {
+  const list = [
+    ...items,
+    item({ id: 'site', kind: 'web', name: '资讯站', searchKey: '资讯站', category: '资讯' }),
+    item({ id: 'bad', kind: 'web', name: '坏站', searchKey: '坏站', isValid: false })
+  ];
+  const h = await setup({ list });
+  assert.equal(h.navItem('web:site').children.at(-1).textContent, '资讯');
+  assert.ok(h.navItem('web:bad').hasClass('broken'));
+  assert.match(h.navItem('web:bad').children.at(-1).textContent, /配置无效/);
+
+  h.navItem('web:site').click();
+  assert.deepEqual(plain(h.last('openWebTool').payload), { webId: 'site' });
+  await h.reply('openWebTool', { ok: true });
+
+  h.navItem('web:site').fire('contextmenu', { preventDefault() {} });
+  let li = h.liOf('web:site');
+  h.menuAction(li, 1).click();
+  assert.deepEqual(plain(h.last('openWebTool').payload), { webId: 'site' });
+  await h.reply('openWebTool', { ok: true });
+
+  h.navItem('web:site').fire('contextmenu', { preventDefault() {} });
+  li = h.liOf('web:site');
+  h.menuAction(li, 2).click();
+  assert.deepEqual(plain(h.last('deleteWebTool').payload), { webId: 'site' });
+  await h.reply('deleteWebTool', { ok: true });
+  assert.match(h.el('toast').textContent, /已删除 资讯站/);
+});
+
+test('配置无效的在线工具点击只提示不打开', async () => {
+  const list = [...items, item({ id: 'bad', kind: 'web', name: '坏站', searchKey: '坏站', isValid: false })];
+  const h = await setup({ list });
+  h.navItem('web:bad').click();
+  assert.equal(h.requests('openWebTool').length, 0);
+  assert.match(h.el('toast').textContent, /配置无效/);
+});
+
+test('添加网址：内容窗口保存自动补 https，主模式按钮打开内容窗口', async () => {
+  const h = await setup({ mode: 'content', view: 'web' });
+  h.view('web-view');
+  h.el('web-name').value = ' 资讯站 ';
+  h.el('web-url').value = 'example.com/news';
+  h.el('web-category').value = ' 资讯 ';
+  h.click('web-save');
+  assert.deepEqual(plain(h.last('addWebTool').payload), {
+    name: '资讯站', url: 'https://example.com/news', category: '资讯', glyph: null
+  });
+  await h.reply('addWebTool', { ok: true });
+  assert.match(h.el('toast').textContent, /已添加在线工具「资讯站」/);
+
+  const main = await setup();
+  main.click('add-web');
+  assert.deepEqual(plain(main.last('openContent').payload), { view: 'web' });
+});
+
+test('右键小工具：原位菜单「删除」走 deleteTool', async () => {
   const h = await setup();
   h.navItem('tool:a').fire('contextmenu', { preventDefault() {} });
+  const li = h.liOf('tool:a');
+  h.menuAction(li, 2).click();
   assert.deepEqual(plain(h.last('deleteTool').payload), { toolId: 'a', deleteStorage: true });
   await h.reply('deleteTool', { ok: true });
   assert.equal(h.requests('launcherList').length, 2);
   assert.equal(h.requests('closeContent').length, 0);
+});
+
+test('右键菜单：详情展开与返回、再右键同一条目收起还原', async () => {
+  const h = await setup();
+  const btn = h.navItem('app:editor');
+  btn.fire('contextmenu', { preventDefault() {} });
+  const li = h.liOf('app:editor');
+  const menu = h.menuOf(li);
+
+  h.menuAction(li, 0).click();
+  const detail = menu.children[1];
+  assert.equal(menu.children[0].hidden, true, '展开详情时应隐藏动作区');
+  assert.equal(detail.hidden, false);
+  const text = detail.children
+    .filter(c => c.hasClass('menu-kv'))
+    .map(c => `${c.children[0].textContent}=${c.children[1].textContent}`)
+    .join('|');
+  assert.match(text, /名称=编辑器/);
+  assert.match(text, /类型=本机程序/);
+  assert.match(text, /ID=editor/);
+  assert.match(text, /使用次数=3 次/);
+  assert.match(text, /状态=正常/);
+
+  detail.children.at(-1).click();
+  assert.equal(menu.children[0].hidden, false, '点返回应恢复动作区');
+  assert.equal(detail.hidden, true);
+
+  btn.fire('contextmenu', { preventDefault() {} });
+  assert.equal(btn.hidden, false, '再次右键应还原条目按钮');
+  assert.equal(menu.hidden, true);
+});
+
+test('一次只开一个菜单：右键另一条目时前一个还原', async () => {
+  const h = await setup();
+  h.navItem('app:editor').fire('contextmenu', { preventDefault() {} });
+  const liA = h.liOf('app:editor');
+  h.navItem('tool:a').fire('contextmenu', { preventDefault() {} });
+  const liB = h.liOf('tool:a');
+  assert.equal(h.navItem('app:editor').hidden, false, '前一个应还原');
+  assert.equal(h.menuOf(liA).hidden, true);
+  assert.equal(h.navItem('tool:a').hidden, true, '新条目应处于菜单态');
+  assert.equal(h.menuOf(liB).hidden, false);
+});
+
+test('Escape 与点击外部收起菜单，点菜单内部不收起', async () => {
+  const h = await setup();
+  h.navItem('app:editor').fire('contextmenu', { preventDefault() {} });
+  const li = h.liOf('app:editor');
+
+  h.fireDocument('click', { target: h.menuOf(li).children[0].children[0] });
+  assert.equal(h.navItem('app:editor').hidden, true, '点菜单内部不应收起');
+
+  h.fireDocument('click', { target: h.el('search') });
+  assert.equal(h.navItem('app:editor').hidden, false, '点击外部应收起');
+
+  h.navItem('app:editor').fire('contextmenu', { preventDefault() {} });
+  h.fireDocument('keydown', { key: 'Escape', target: null });
+  assert.equal(h.navItem('app:editor').hidden, false, 'Escape 应收起');
+});
+
+test('菜单「属性」调用 revealItem 并收起菜单', async () => {
+  const h = await setup();
+  h.navItem('app:editor').fire('contextmenu', { preventDefault() {} });
+  const li = h.liOf('app:editor');
+  h.menuAction(li, 1).click();
+  assert.deepEqual(plain(h.last('revealItem').payload), { kind: 'app', id: 'editor' });
+  assert.equal(h.navItem('app:editor').hidden, false);
 });
 
 /* ================= 内容窗口：路由与内嵌 ================= */

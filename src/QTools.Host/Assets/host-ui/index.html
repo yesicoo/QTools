@@ -11,16 +11,8 @@
 
 <div class="layout">
 
-  <!-- ============ 左侧栏：品牌 / 搜索 / 列表 / 底部操作 ============ -->
+  <!-- ============ 左侧栏：搜索 / 列表 / 底部操作 ============ -->
   <aside class="sidebar">
-    <div class="brand">
-      <img class="logo" src="/__host__/icon.png" alt="QTools">
-      <div class="brand-text">
-        <strong>QTools</strong>
-        <span>桌面启动器 · 小工具宿主</span>
-      </div>
-    </div>
-
     <div class="search">
       <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M20 20l-3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
       <input id="search" type="search" placeholder="搜索程序或工具…" autocomplete="off">
@@ -42,7 +34,11 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m0 0L8 8m4-4l4 4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
         导入工具
       </button>
-      <button id="open-settings" class="btn ghost block span2" type="button" title="设置">
+      <button id="add-web" class="btn ghost block" type="button" title="录入一个网址，保存为在线工具">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M3 12h18M12 3c2.6 2.6 4 5.7 4 9s-1.4 6.4-4 9c-2.6-2.6-4-5.7-4-9s1.4-6.4 4-9z" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+        添加网址
+      </button>
+      <button id="open-settings" class="btn ghost block" type="button" title="设置">
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M19.4 15a1.7 1.7 0 00.34 1.87l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.7 1.7 0 00-1.87-.34 1.7 1.7 0 00-1.03 1.56V21a2 2 0 11-4 0v-.09a1.7 1.7 0 00-1.11-1.56 1.7 1.7 0 00-1.87.34l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.7 1.7 0 00.34-1.87 1.7 1.7 0 00-1.56-1.03H3a2 2 0 110-4h.09a1.7 1.7 0 001.56-1.11 1.7 1.7 0 00-.34-1.87l-.06-.06a2 2 0 112.83-2.83l.06.06a1.7 1.7 0 001.87.34H9a1.7 1.7 0 001.03-1.56V3a2 2 0 114 0v.09a1.7 1.7 0 001.03 1.56 1.7 1.7 0 001.87-.34l.06-.06a2 2 0 112.83 2.83l-.06.06a1.7 1.7 0 00-.34 1.87V9a1.7 1.7 0 001.56 1.03H21a2 2 0 110 4h-.09a1.7 1.7 0 00-1.56 1.03z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
         设置
       </button>
@@ -220,6 +216,36 @@
           <button id="import-confirm" class="btn primary" type="button">确认导入</button>
           <button id="import-abort" class="btn ghost" type="button">放弃</button>
         </div>
+      </div>
+    </section>
+
+    <!-- 在线工具（录入网址） -->
+    <section id="web-view" class="panel" hidden>
+      <div class="panel-head">
+        <h2>添加在线工具</h2>
+        <button id="web-cancel" class="btn ghost sm" type="button">取消</button>
+      </div>
+      <p class="hint">把常用网址保存为「在线工具」。点击列表里的在线工具，会用独立窗口在线打开；
+        不影响本机文件，也不会注入宿主桥接能力。</p>
+
+      <div class="form">
+        <label>名称
+          <input id="web-name" type="text" maxlength="60" placeholder="例如：行业资讯站">
+        </label>
+        <label>网址
+          <input id="web-url" type="text" maxlength="2048" placeholder="https://…（不写协议时按 https 处理）">
+        </label>
+        <label>分类（可选）
+          <input id="web-category" type="text" maxlength="30" placeholder="例如：资讯">
+        </label>
+        <label>图标字符（可选）
+          <input id="web-glyph" type="text" maxlength="4" placeholder="留空则显示名称首字">
+        </label>
+      </div>
+
+      <div class="row">
+        <button id="web-save" class="btn primary" type="button">保存</button>
+        <span id="web-status" class="hint"></span>
       </div>
     </section>
 

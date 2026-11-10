@@ -20,6 +20,9 @@ public static class AppPaths
     /// <summary>本机程序启动项目录（每个启动项一个子目录，含 app.json）。</summary>
     public static string AppsDirectory => Path.Combine(RootDirectory, "apps");
 
+    /// <summary>在线工具目录（每个在线工具一个子目录，含 web.json）。</summary>
+    public static string WebToolsDirectory => Path.Combine(RootDirectory, "webtools");
+
     /// <summary>运行期数据目录。</summary>
     public static string DataDirectory => Path.Combine(RootDirectory, "data");
 
@@ -60,6 +63,9 @@ public static class AppPaths
 
     /// <summary>使用频次统计（列表默认排序依据）。</summary>
     public static string UsageFilePath => Path.Combine(DataDirectory, "usage.json");
+
+    /// <summary>索引程序隐藏列表（右键「从列表隐藏」的持久化记录）。</summary>
+    public static string HiddenProgramsFilePath => Path.Combine(DataDirectory, "hidden-programs.json");
 
     /// <summary>索引程序图标缓存（绝不能放进 apps/，否则会被当成手动启动项扫进注册表）。</summary>
     public static string IconCacheDirectory => Path.Combine(DataDirectory, "icon-cache");
@@ -138,6 +144,7 @@ public static class AppPaths
 
         Directory.CreateDirectory(ToolsDirectory);
         Directory.CreateDirectory(AppsDirectory);
+        Directory.CreateDirectory(WebToolsDirectory);
         Directory.CreateDirectory(StorageDirectory);
         Directory.CreateDirectory(LogsDirectory);
         Directory.CreateDirectory(WebViewDataDirectory);

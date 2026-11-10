@@ -348,7 +348,9 @@ internal static class LauncherMethods
             RequireApps(context),
             context.ProgramIndex,
             context.Usage,
-            Configuration.AppPaths.IconCacheDirectory);
+            Configuration.AppPaths.IconCacheDirectory,
+            context.WebTools,
+            context.HiddenPrograms);
 
         return System.Threading.Tasks.Task.FromResult(JsonSerializer.SerializeToElement(
             view, AppJsonContext.Default.LauncherListView));
@@ -470,6 +472,132 @@ internal static class LauncherMethods
         var picked = await context.Shell.PickProgramFileAsync().ConfigureAwait(false);
         return JsonSerializer.SerializeToElement(
             new PickedFileView(picked), AppJsonContext.Default.PickedFileView);
+    }
+
+    /// <summary>新增在线工具（录入网址，保存为 webtools/{id}/web.json）。</summary>
+    public static async System.Threading.Tasks.Task<JsonElement> AddWebToolAsync(BridgeContext context)
+    {
+        if (context.WebToolStore is null)
+        {
+            throw new BridgeException("INTERNAL_ERROR", "在线工具存储未就绪");
+        }
+
+        var payload = JsonSerializer.Deserialize(
+            PayloadReader.RequireObject(context.Payload).GetRawText(),
+            AppJsonContext.Default.AddWebToolPayload)
+            ?? throw new BridgeException("BRIDGE_BAD_REQUEST", "payload 解析失败");
+
+        await context.WebToolStore
+            .AddAsync(payload.Name, payload.Url, payload.Category, payload.Glyph, CancellationToken.None)
+            .ConfigureAwait(false);
+
+        return JsonSerializer.SerializeToElement(
+            new OkResult(true), AppJsonContext.Default.OkResult);
+    }
+
+    /// <summary>删除在线工具：先关其窗口（若开着），再删除 webtools/{id}/。</summary>
+    public static async System.Threading.Tasks.Task<JsonElement> DeleteWebToolAsync(BridgeContext context)
+    {
+        var webId = PayloadReader.ReadStringPayload(context.Payload, "webId", required: true, maxLength: 63);
+        if (context.WebToolStore is null)
+        {
+            throw new BridgeException("INTERNAL_ERROR", "在线工具存储未就绪");
+        }
+
+        if (context.Shell is not null)
+        {
+            await context.Shell.CloseToolWindowsAsync(Shell.ShellHost.WebWindowKey(webId)).ConfigureAwait(false);
+        }
+
+        var deleted = context.WebToolStore.Delete(webId);
+        return JsonSerializer.SerializeToElement(
+            new OkResult(deleted), AppJsonContext.Default.OkResult);
+    }
+
+    /// <summary>在独立 WebView 窗口在线打开一个已录入的网址。</summary>
+    public static async System.Threading.Tasks.Task<JsonElement> OpenWebToolAsync(BridgeContext context)
+    {
+        var webId = PayloadReader.ReadStringPayload(context.Payload, "webId", required: true, maxLength: 63);
+        if (context.WebTools is null)
+        {
+            throw new BridgeException("INTERNAL_ERROR", "在线工具注册表未就绪");
+        }
+
+        var web = context.WebTools.Find(webId)
+            ?? throw new BridgeException("WEB_NOT_FOUND", $"未找到在线工具 '{webId}'");
+
+        if (!web.IsValid)
+        {
+            throw new BridgeException("WEB_INVALID", $"在线工具配置校验失败：{string.Join("；", web.Errors)}");
+        }
+
+        if (context.Shell is null)
+        {
+            throw new BridgeException("INTERNAL_ERROR", "宿主壳未就绪");
+        }
+
+        await context.Shell.OpenWebToolAsync(web).ConfigureAwait(false);
+        context.Usage?.Record(webId);
+
+        return JsonSerializer.SerializeToElement(
+            new OkResult(true), AppJsonContext.Default.OkResult);
+    }
+
+    /// <summary>右键索引程序「从列表隐藏」：持久化记录，跨重新索引保留。</summary>
+    public static System.Threading.Tasks.Task<JsonElement> HideProgramAsync(BridgeContext context)
+    {
+        var programId = PayloadReader.ReadStringPayload(context.Payload, "programId", required: true, maxLength: 63);
+        if (context.HiddenPrograms is null)
+        {
+            throw new BridgeException("INTERNAL_ERROR", "隐藏列表未就绪");
+        }
+
+        var hidden = context.HiddenPrograms.Hide(programId);
+        return System.Threading.Tasks.Task.FromResult(JsonSerializer.SerializeToElement(
+            new OkResult(hidden), AppJsonContext.Default.OkResult));
+    }
+
+    /// <summary>恢复显示一个被隐藏的索引程序。</summary>
+    public static System.Threading.Tasks.Task<JsonElement> UnhideProgramAsync(BridgeContext context)
+    {
+        var programId = PayloadReader.ReadStringPayload(context.Payload, "programId", required: true, maxLength: 63);
+        if (context.HiddenPrograms is null)
+        {
+            throw new BridgeException("INTERNAL_ERROR", "隐藏列表未就绪");
+        }
+
+        var restored = context.HiddenPrograms.Unhide(programId);
+        return System.Threading.Tasks.Task.FromResult(JsonSerializer.SerializeToElement(
+            new OkResult(restored), AppJsonContext.Default.OkResult));
+    }
+
+    /// <summary>右键菜单「属性」：在系统文件管理器中显示条目所在位置（文件选中、目录直接打开）。</summary>
+    public static System.Threading.Tasks.Task<JsonElement> RevealItemAsync(BridgeContext context)
+    {
+        var kind = PayloadReader.ReadStringPayload(context.Payload, "kind", required: true, maxLength: 15);
+        var id = PayloadReader.ReadStringPayload(context.Payload, "id", required: true, maxLength: 63);
+
+        var target = kind switch
+        {
+            LauncherListBuilder.KindTool => context.Registry?.Find(id)?.Directory,
+            LauncherListBuilder.KindApp => context.Apps?.Find(id)?.Entry.Target,
+            LauncherListBuilder.KindProgram => context.ProgramIndex?.Find(id)?.Target,
+            _ => throw new BridgeException("BRIDGE_BAD_REQUEST", $"不支持的定位类型 '{kind}'"),
+        };
+
+        if (string.IsNullOrWhiteSpace(target))
+        {
+            throw new BridgeException("ITEM_NOT_FOUND", $"未找到条目 '{id}'");
+        }
+
+        if (!File.Exists(target) && !Directory.Exists(target))
+        {
+            throw new BridgeException("APP_TARGET_NOT_FOUND", $"目标不存在：{target}");
+        }
+
+        LauncherRevealer.Reveal(target);
+        return System.Threading.Tasks.Task.FromResult(JsonSerializer.SerializeToElement(
+            new OkResult(true), AppJsonContext.Default.OkResult));
     }
 }
 
@@ -848,13 +976,13 @@ internal static class ShellMethods
             JsonSerializer.SerializeToElement(BackupMethods.BuildConfigView(context), AppJsonContext.Default.BackupConfigView));
     }
 
-    /// <summary>打开内容窗口（工具/AI创建/导入）：独立窗口贴主窗口边缘，自动吸附。</summary>
+    /// <summary>打开内容窗口（工具/AI创建/导入/在线工具）：独立窗口贴主窗口边缘，自动吸附。</summary>
     public static async System.Threading.Tasks.Task<JsonElement> OpenContentAsync(BridgeContext context)
     {
         var view = PayloadReader.ReadStringPayload(context.Payload, "view", required: true, maxLength: 20);
-        if (view is not ("tool" or "create" or "import"))
+        if (view is not ("tool" or "create" or "import" or "web"))
         {
-            throw new BridgeException("BRIDGE_BAD_REQUEST", "view 必须是 tool / create / import");
+            throw new BridgeException("BRIDGE_BAD_REQUEST", "view 必须是 tool / create / import / web");
         }
 
         string? toolId = null;

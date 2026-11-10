@@ -71,20 +71,20 @@ body {
   overflow-y: auto;
 }
 
-.brand { display: flex; align-items: center; gap: 10px; padding: 4px 6px 0; }
+.brand { padding: 4px 6px 0; }
 .logo { width: 34px; height: 34px; flex: none; border-radius: 9px; }
-.brand-text { display: grid; }
-.brand-text strong { font-size: 15px; letter-spacing: .2px; }
-.brand-text span { font-size: 11px; color: var(--muted); }
 
-/* 底部操作坞：列表优先占据上方空间，按钮固定在侧栏底部 */
+/* 底部操作坞：四个紧凑按钮一行排开（图标在上、文字在下），列表优先占据上方空间 */
 .side-actions {
-  flex: none; display: grid; grid-template-columns: 1fr 1fr; gap: 6px;
-  padding: 10px 2px 0; border-top: 1px solid var(--border);
+  flex: none; display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px;
+  padding: 8px 2px 0; border-top: 1px solid var(--border);
 }
-.side-actions .btn { padding: 7px 9px; font-size: 12.5px; }
-.side-actions .btn svg { width: 14px; height: 14px; }
-.btn.block { width: 100%; justify-content: flex-start; }
+.side-actions .btn {
+  flex-direction: column; justify-content: center; gap: 3px;
+  padding: 7px 2px 6px; font-size: 10.5px; line-height: 1; border-radius: 8px;
+}
+.side-actions .btn svg { width: 15px; height: 15px; }
+.btn.block { width: 100%; justify-content: center; }
 
 .search { margin: 2px 4px 0; display: flex; align-items: center; gap: 8px;
   padding: 8px 11px; border-radius: 9px;
@@ -118,6 +118,42 @@ ul.nav-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; 
 .nav-label strong { font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nav-label span { font-size: 10.5px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nav-badge { font-size: 10px; color: var(--faint); flex: none; }
+
+/* ---- 右键原位菜单：条目按钮 ↔ 菜单在同一个 li 里 hidden 互换 ---- */
+.nav-item[hidden], .nav-menu[hidden], .menu-actions[hidden], .menu-detail[hidden] { display: none; }
+.nav-menu {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 4px; border-radius: 10px;
+  background: var(--panel); border: 1px solid var(--border);
+  box-shadow: 0 8px 20px rgba(15, 23, 42, .14);
+  animation: navMenuIn .16s ease;
+  transform-origin: top center;
+}
+@keyframes navMenuIn {
+  from { opacity: 0; transform: translateY(-5px) scale(.97); }
+  to { opacity: 1; transform: none; }
+}
+.menu-actions { display: grid; gap: 1px; }
+.menu-action {
+  display: flex; align-items: center; gap: 8px; text-align: left;
+  font: inherit; font-size: 12.5px; color: var(--text);
+  background: transparent; border: 0; border-radius: 7px;
+  padding: 7px 9px; cursor: pointer;
+  transition: background .14s;
+}
+.menu-action svg { width: 14px; height: 14px; flex: none; opacity: .85; }
+.menu-action:hover { background: var(--accent-soft); }
+.menu-action.danger { color: var(--danger); }
+.menu-action.back { color: var(--muted); font-size: 12px; }
+.menu-detail { display: grid; gap: 5px; padding: 3px 5px 6px; animation: navMenuIn .16s ease; }
+.menu-kv { display: grid; gap: 1px; padding: 2px 4px; }
+.menu-kv span { font-size: 10.5px; color: var(--muted); }
+.menu-kv b { font-size: 12px; font-weight: 500; word-break: break-all; }
+.menu-restore { animation: navRestoreIn .18s ease; }
+@keyframes navRestoreIn {
+  from { opacity: 0; transform: translateY(-3px); }
+  to { opacity: 1; transform: none; }
+}
 .side-foot { padding: 10px 8px; font-size: 12px; color: var(--muted); }
 
 /* ---- 右侧内容区 ---- */
@@ -461,7 +497,6 @@ body.mode-content .content { padding: 14px 16px 20px; }
 body.mode-content .tool-view { min-height: calc(100vh - 34px); }
 
 /* 底部操作坞：设置按钮独占一行 */
-.span2 { grid-column: span 2; }
 
 /* 后台索引状态行 */
 .index-status {

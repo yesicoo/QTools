@@ -346,6 +346,9 @@
      *      / listVersions / switchVersion / deleteVersion / generateUpdate / applyUpdate
      *      / listApps / launchApp / addApp / deleteApp / discoverPrograms / pickProgram
      *      / launcherList / reindexPrograms / openContent / closeContent
+     *      / addWebTool / deleteWebTool / openWebTool（在线工具：录入网址 → 独立窗口在线打开）
+     *      / hideProgram / unhideProgram（索引程序从列表隐藏 / 恢复显示）
+     *      / revealItem（在文件管理器中定位条目所在位置）
      *      / embedTool（签发内嵌凭证，返回带 ?bt= 的工具 URL 供 iframe 内嵌）
      *      / listBackups / createBackup / restoreBackup / deleteBackup / importBackupFile
      *      / openBackupDirectory / getBackupConfig / setBackupConfig / gitPush / gitRestore

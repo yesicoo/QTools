@@ -8,7 +8,7 @@
 
 **QTools** —— 一个 Windows/Linux/macOS 桌面应用，同时是：
 
-1. **系统程序启动器**：用户手动添加系统里已安装的程序（`.exe` / `.lnk` / `.app` / `.desktop`），点一下就启动。
+1. **系统程序启动器**：用户手动添加系统里已安装的程序（`.exe` / `.lnk` / `.app` / `.desktop`），点一下就启动；也支持「添加网址」把常用 URL 保存为**在线工具**，点击用独立 WebView 窗口在线打开（不注入 `window.host`，与宿主能力隔离）。
 2. **小工具宿主**：托管纯静态 HTML/CSS/JS 小工具，经 `127.0.0.1` 上的 Kestrel 提供服务，用系统 WebView 打开，并通过注入的 `window.host` 向页面提供 AI / 存储 / 二进制文件 / 硬件捕获能力。
 3. **AI 工具工厂**：用自然语言生成工具、对已有工具做 AI 优化更新，带版本管理与回滚。
 
@@ -38,7 +38,7 @@
 # 构建（Debug，够日常开发）
 dotnet build
 
-# 单元测试（当前基线 319 个）
+# 单元测试（当前基线 354 个）
 dotnet test
 
 # 开发运行（会开 GUI 窗口）
@@ -69,7 +69,7 @@ src/QTools.Host/
 ├── Cli/CommandLine.cs      手写参数解析（不引 System.CommandLine）
 ├── Configuration/          AppPaths（路径真源）/ AppConfig
 ├── Creator/                ToolCreator（AI 生成+更新）、ToolImporter（本地 HTML 导入）、ContentSecurityScanner
-├── Launcher/               AppEntry / AppRegistry / AppStore / AppLauncher / ProgramDiscovery
+├── Launcher/               AppEntry / WebToolEntry / AppRegistry / AppStore / WebToolStore / AppLauncher / ProgramDiscovery
 ├── Logging/Log.cs          滚动文件日志 + Key 脱敏
 ├── Native/NativeLibraries 内嵌原生库解压 + DllImportResolver
 ├── Security/               ISecretStore + DPAPI / AES-GCM 两套实现
@@ -196,7 +196,7 @@ tests/QTools.Tests/         14 个测试文件，纯单元 + 内存级集成
 
 ### 7.12 统一启动列表的四条硬约束（索引 / 频次 / 双模式 / 去重）
 
-2026-11 主窗口重构为细长条统一列表（小工具 + 手动启动项 + 自动索引程序混排）时确立：
+2026-11 主窗口重构为细长条统一列表（小工具 + 手动启动项 + 自动索引程序 + 在线工具混排）时确立：
 
 1. **后台索引期间旧索引必须始终可用**：`ProgramIndex` 启动即加载旧索引供列表使用，后台重扫完成后才「临时文件 + 原子 `File.Move` 覆盖 + 整体换内存快照」；扫描失败保留旧索引。绝不允许"正在索引 → 列表为空"。
 2. **索引 id 必须稳定**：`BuildId = "idx-" + SHA256(小写目标路径) 前 12 位`，跨次扫描不变——使用频次按 id 记账，id 漂移会清零频次。手动启动项按目标路径优先去重。
@@ -254,8 +254,8 @@ tests/QTools.Tests/         14 个测试文件，纯单元 + 内存级集成
 5. **PowerShell 里 `"$(id)"` 会被当子表达式求值**。生成含 `$(...)` 的代码时用编辑工具写文件，别用字符串拼接。
 
 **测试分层**：
-- `dotnet test`：纯单元 + 内存级集成（真实 `BridgeDispatcher.DispatchAsync` + 临时目录）。当前 319 个（含内嵌凭证、拼音搜索、备份/Git、流式取消链路、索引原子覆盖、内容窗口初始定位）。
-- `node --test tests/*.cjs`：前端行为级测试（vm 沙箱 + DOM shim，跑 `app.js`/`bridge.js`/示例工具页面）。当前 108 个。注意：vm 沙箱里创建的对象带另一套原型，断言前先用 `JSON.parse(JSON.stringify(...))` 归一化。
+- `dotnet test`：纯单元 + 内存级集成（真实 `BridgeDispatcher.DispatchAsync` + 临时目录）。当前 354 个（含内嵌凭证、索引程序隐藏、拼音搜索、备份/Git、流式取消链路、索引原子覆盖、内容窗口初始定位、在线工具、原位菜单定位）。
+- `node --test tests/*.cjs`：前端行为级测试（vm 沙箱 + DOM shim，跑 `app.js`/`bridge.js`/示例工具页面）。当前 116 个。注意：vm 沙箱里创建的对象带另一套原型，断言前先用 `JSON.parse(JSON.stringify(...))` 归一化。
 - `--self-test`：真起 Kestrel，27 项 HTTP 断言（host 头校验、路径穿越、工具资源、设置页、品牌图标；其中工具资源每工具 3 项，数量随已装工具数浮动）。
 - ad-hoc 验收脚本：**不入库**，历史脚本在 `%TEMP%`。GUI 真机验证可用 WebView2 远程调试：启动时设 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=<port> --remote-debugging-address=127.0.0.1`，再用 CDP（`/json/list` + WebSocket）注入 JS / 截图；日志断言（`-> ok`、`已打开...窗口`）仍是最轻量的手段。
 
@@ -264,7 +264,7 @@ tests/QTools.Tests/         14 个测试文件，纯单元 + 内存级集成
 ## 11. 提交前检查清单
 
 - [ ] `dotnet build` → 0 error / 0 warning
-- [ ] `dotnet test` → 全绿（当前基线 **319**）
+- [ ] `dotnet test` → 全绿（当前基线 **354**）
 - [ ] `node --test tests/app.test.cjs` → 全绿（改过 `app.js` 时必须跑）
 - [ ] `--self-test` → **27 PASS / 0 FAIL**，退出码 0
 - [ ] `dotnet publish -c Release` → **0 AOT warning**

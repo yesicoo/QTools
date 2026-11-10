@@ -315,6 +315,7 @@ public sealed class ShellHost
                 "tool" => $"{_registry.Find(toolId ?? "")?.Name ?? "工具"} — QTools",
                 "create" => "AI 创建工具 — QTools",
                 "import" => "导入工具 — QTools",
+                "web" => "添加在线工具 — QTools",
                 _ => "QTools",
             };
 
@@ -597,6 +598,67 @@ public sealed class ShellHost
             window.Show();
 
             Log.Info($"已打开设置窗口 → {SettingsUrl}");
+            return System.Threading.Tasks.Task.CompletedTask;
+        }).ConfigureAwait(false);
+    }
+
+    /// <summary>在线工具窗口在窗口表中的键（与 toolId 同一命名空间，避免冲突）。</summary>
+    public static string WebWindowKey(string webId) => "web:" + webId;
+
+    /// <summary>
+    /// 打开（或聚焦）一个在线工具窗口：WebView 直接加载外部网址。
+    /// 不注册桥接、不注入 window.host——在线工具与宿主能力完全隔离。
+    /// </summary>
+    public async System.Threading.Tasks.Task OpenWebToolAsync(Launcher.LoadedWebTool tool)
+    {
+        // 磁盘上的 web.json 可被手工改动，打开前再校验一次协议白名单
+        var url = tool.Entry.Url?.Trim() ?? string.Empty;
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) ||
+            (uri.Scheme != "http" && uri.Scheme != "https"))
+        {
+            throw new BridgeException("WEB_URL_INVALID", $"在线工具网址必须是 http/https：{tool.Id}");
+        }
+
+        var key = WebWindowKey(tool.Id);
+
+        await InvokeOnUiThreadAsync(() =>
+        {
+            if (_toolWindows.TryGetValue(key, out var existing))
+            {
+                if (!existing.IsClosed)
+                {
+                    existing.Activate();
+                    return System.Threading.Tasks.Task.CompletedTask;
+                }
+
+                _toolWindows.Remove(key);
+            }
+
+            var window = new PhotinoWindow()
+                .SetTitle($"{tool.Name} — QTools")
+                .SetUseOsDefaultSize(false)
+                .SetSize(1200, 800)
+                .SetMinSize(720, 540)
+                .SetResizable(true)
+                .SetContextMenuEnabled(_devMode)
+                .SetDevToolsEnabled(_devMode)
+                .SetUserDataFolder(QTools.Host.Configuration.AppPaths.WebViewUserDataDirectory)
+                .Center()
+                .RegisterClosingHandler((_, _) => Log.Info($"在线工具窗口请求关闭：{tool.Id}"))
+                .RegisterClosedHandler((_, _) =>
+                {
+                    Log.Info($"在线工具窗口已关闭：{tool.Id}");
+                    _toolWindows.Remove(key);
+                })
+                .Load(url);
+
+            _toolWindows[key] = window;
+            ApplyWindowIcon(window);
+            // 故意不 AttachBridge：外部页面拿不到 window.host，也无法进入桥接分发
+
+            window.Show();
+
+            Log.Info($"已打开在线工具窗口 {tool.Id} → {url}");
             return System.Threading.Tasks.Task.CompletedTask;
         }).ConfigureAwait(false);
     }

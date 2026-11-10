@@ -1,7 +1,7 @@
 /* QTools 双模式页面：
  * 主窗口（细长条）：统一列表（小工具 + 本机程序，按使用频次排序）；
  *   点工具 → 内容窗口贴边打开；点本机程序 → 直接启动。
- * 内容窗口（?mode=content&view=…）：内嵌工具 / AI 创建 / 导入 / 版本管理。
+ * 内容窗口（?mode=content&view=…）：内嵌工具 / AI 创建 / 导入 / 在线工具 / 版本管理。
  * 约束：本页面 CSP 为 connect-src 'none'，禁止 fetch/XHR——一切能力调用都走 window.host 桥接。
  * 约束：一律用 on(id, event, handler) 绑事件（元素缺失静默跳过，避免单点缺失中断整个脚本）。 */
 (function () {
@@ -40,6 +40,9 @@
   var embedSequence = 0;
   var updateSequence = 0;
   var createSequence = 0;
+
+  /* 右键原位菜单：一次只开一个；li 内按钮 ↔ 菜单用 hidden 互换，重渲染时直接作废 */
+  var openMenuState = null;         /* { key, item, li, btn, menuEl, actionsEl, detailEl } */
 
   function $(id) { return document.getElementById(id); }
 
@@ -95,7 +98,7 @@
   }
 
   /* ================= 视图切换 ================= */
-  var VIEWS = ["tool-view", "content-home", "create-view", "version-view", "import-view"];
+  var VIEWS = ["tool-view", "content-home", "create-view", "version-view", "import-view", "web-view"];
 
   function showView(name) {
     VIEWS.forEach(function (id) {
@@ -165,6 +168,7 @@
     var empty = $("side-empty");
     if (!ul) { return; }
 
+    openMenuState = null;
     ul.innerHTML = "";
     var total = 0;
 
@@ -181,16 +185,19 @@
   }
 
   function kindLabel(kind) {
-    return kind === "tool" ? "小工具" : "本机程序";
+    return kind === "tool" ? "小工具" : kind === "web" ? "在线工具" : "本机程序";
   }
 
   function buildNavItem(item) {
     var isTool = item.kind === "tool";
-    var broken = isTool ? !item.isValid : !item.targetExists;
+    var isWeb = item.kind === "web";
+    var broken = isWeb ? !item.isValid : (isTool ? !item.isValid : !item.targetExists);
     var glyph = isTool ? iconFor(item.id, item.name) : appGlyph(item);
     var badge = isTool
       ? (item.isValid ? "v" + (item.version || "") : "manifest 无效")
-      : (!item.targetExists ? "目标不存在" : (item.category || ""));
+      : isWeb
+        ? (!item.isValid ? "配置无效" : (item.category || ""))
+        : (!item.targetExists ? "目标不存在" : (item.category || ""));
 
     var li = document.createElement("li");
     var btn = document.createElement("button");
@@ -231,19 +238,21 @@
     btn.addEventListener("click", function () { openItem(item); });
     btn.addEventListener("contextmenu", function (e) {
       e.preventDefault();
-      if (item.kind === "app") { deleteApp(item); }
-      else if (isTool) { deleteTool(item); }
+      toggleItemMenu(item, li, btn);
     });
     li.appendChild(btn);
     return li;
   }
 
-  /** 列表点击：工具 → 内容窗口贴边打开；本机程序 → 直接启动。 */
+  /** 列表点击：工具 → 内容窗口贴边打开；本机程序 → 直接启动；在线工具 → 独立窗口在线打开。 */
   function openItem(item) {
     if (!host) { toast("桥接不可用", true); return; }
     if (item.kind === "tool") {
       if (!item.isValid) { toast("manifest 无效，不能打开", true); return; }
       openContentPanel("tool", item.id);
+    } else if (item.kind === "web") {
+      if (!item.isValid) { toast("配置无效，不能打开", true); return; }
+      openWebTool(item);
     } else {
       if (!item.targetExists) { toast("目标不存在，可能已被卸载", true); return; }
       launchApp(item);
@@ -344,6 +353,215 @@
       toast("已移除 " + item.name);
       refreshLauncher();
     }, function (e) { toast("移除失败：" + errText(e), true); });
+  }
+
+  /* ================= 索引程序：右键从列表隐藏 ================= */
+  function hideProgram(item) {
+    if (!confirm("确定从列表隐藏「" + item.name + "」？\n（只影响启动器列表，不会改动程序本身；记录会保留，重新索引也不会再出现）")) { return; }
+    host.callManager("manager.hideProgram", { programId: item.id }).then(function () {
+      toast("已隐藏 " + item.name);
+      refreshLauncher();
+    }, function (e) { toast("操作失败：" + errText(e), true); });
+  }
+
+  /* ================= 右键原位菜单（详情 / 属性 / 删除，一次只开一个） ================= */
+  function itemMenuKey(item) { return item.kind + ":" + item.id; }
+
+  /** 收起菜单、还原条目按钮（带轻微还原动画）。 */
+  function closeItemMenu() {
+    var state = openMenuState;
+    if (!state) { return; }
+    openMenuState = null;
+    state.menuEl.hidden = true;
+    state.btn.hidden = false;
+    state.btn.classList.add("menu-restore");
+    setTimeout(function () { state.btn.classList.remove("menu-restore"); }, 240);
+  }
+
+  function toggleItemMenu(item, li, btn) {
+    var key = itemMenuKey(item);
+    if (openMenuState && openMenuState.key === key) { closeItemMenu(); return; }
+    closeItemMenu();
+    openItemMenu(item, li, btn);
+  }
+
+  /* 菜单图标：内联 SVG（feather 风格，stroke 随文字色），与底部 dock 的图标语言一致 */
+  var MENU_ICONS = {
+    detail: '<circle cx="12" cy="12" r="9"/><path d="M12 8h.01M12 11v5"/>',
+    folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+    globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18 15 15 0 0 1 0-18z"/>',
+    trash: '<path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 13h10l1-13"/>',
+    minus: '<circle cx="12" cy="12" r="9"/><path d="M8 12h8"/>',
+    eyeOff: '<path d="M3 3l18 18M10.6 10.6a2 2 0 0 0 2.8 2.8M9.9 5.2A9.6 9.6 0 0 1 12 5c7 0 10 7 10 7a17 17 0 0 1-3 3.9M6.6 6.6A16.6 16.6 0 0 0 2 12s3 7 10 7a9.7 9.7 0 0 0 5.4-1.6"/>',
+    back: '<path d="M19 12H5m7-7-7 7 7 7"/>'
+  };
+
+  function menuIcon(name) {
+    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      MENU_ICONS[name] + '</svg>';
+  }
+
+  function openItemMenu(item, li, btn) {
+    if (!host) { toast("桥接不可用", true); return; }
+
+    var actionsEl = document.createElement("div");
+    actionsEl.className = "menu-actions";
+
+    var detailEl = buildItemDetail(item);
+    detailEl.hidden = true;
+
+    var backBtn = document.createElement("button");
+    backBtn.type = "button";
+    backBtn.className = "menu-action back";
+    backBtn.innerHTML = menuIcon("back");
+    var backText = document.createElement("span");
+    backText.textContent = "返回";
+    backBtn.appendChild(backText);
+    backBtn.addEventListener("click", function () {
+      detailEl.hidden = true;
+      actionsEl.hidden = false;
+    });
+    detailEl.appendChild(backBtn);
+
+    function menuAction(label, cls, handler, icon) {
+      var a = document.createElement("button");
+      a.type = "button";
+      a.className = "menu-action" + (cls ? " " + cls : "");
+      a.innerHTML = menuIcon(icon);
+      var t = document.createElement("span");
+      t.textContent = label;
+      a.appendChild(t);
+      a.addEventListener("click", handler);
+      actionsEl.appendChild(a);
+    }
+
+    menuAction("详情", "", function () {
+      actionsEl.hidden = true;
+      detailEl.hidden = false;
+    }, "detail");
+
+    if (item.kind === "web") {
+      menuAction("打开网址", "", function () { closeItemMenu(); openWebTool(item); }, "globe");
+    } else {
+      menuAction("属性", "", function () { revealItem(item); }, "folder");
+    }
+
+    menuAction(item.kind === "app" ? "移除" : item.kind === "program" ? "隐藏" : "删除", "danger", function () {
+      closeItemMenu();
+      if (item.kind === "app") { deleteApp(item); }
+      else if (item.kind === "web") { deleteWebTool(item); }
+      else if (item.kind === "program") { hideProgram(item); }
+      else { deleteTool(item); }
+    }, item.kind === "app" ? "minus" : item.kind === "program" ? "eyeOff" : "trash");
+
+    var menuEl = document.createElement("div");
+    menuEl.className = "nav-menu";
+    menuEl.hidden = true;
+    /* 在展开的菜单上再右键 = 收起还原，不弹浏览器原生菜单 */
+    menuEl.addEventListener("contextmenu", function (e) {
+      e.preventDefault();
+      closeItemMenu();
+    });
+    menuEl.appendChild(actionsEl);
+    menuEl.appendChild(detailEl);
+
+    li.appendChild(menuEl);
+    openMenuState = { key: itemMenuKey(item), item: item, li: li, btn: btn, menuEl: menuEl, actionsEl: actionsEl, detailEl: detailEl };
+    btn.hidden = true;
+    menuEl.hidden = false;
+  }
+
+  /** 条目详情（原位展开）：名称/类型/ID/版本/类别/目标或网址/使用次数/状态。 */
+  function buildItemDetail(item) {
+    var detailEl = document.createElement("div");
+    detailEl.className = "menu-detail";
+
+    var status = item.kind === "web"
+      ? (item.isValid ? "正常" : "配置无效")
+      : item.kind === "tool"
+        ? (item.isValid ? "正常" : "manifest 无效")
+        : (item.targetExists ? "正常" : "目标不存在");
+
+    var rows = [["名称", item.name], ["类型", kindLabel(item.kind)], ["ID", item.id]];
+    if (item.kind === "tool" && item.version) { rows.push(["版本", "v" + item.version]); }
+    if (item.category) { rows.push(["类别", item.category]); }
+    if (item.target) { rows.push([item.kind === "web" ? "网址" : "目标", item.target]); }
+    rows.push(["使用次数", (item.useCount || 0) + " 次"], ["状态", status]);
+
+    rows.forEach(function (row) {
+      var kv = document.createElement("div");
+      kv.className = "menu-kv";
+      var k = document.createElement("span");
+      k.textContent = row[0];
+      var v = document.createElement("b");
+      v.textContent = row[1];
+      kv.appendChild(k);
+      kv.appendChild(v);
+      detailEl.appendChild(kv);
+    });
+
+    return detailEl;
+  }
+
+  /** 右键菜单「属性」：在系统文件管理器中定位条目（成功后菜单保持收起）。 */
+  function revealItem(item) {
+    if (!host) { toast("桥接不可用", true); return; }
+    closeItemMenu();
+    host.callManager("manager.revealItem", { kind: item.kind, id: item.id }).then(function () {
+      /* 文件管理器已在前台打开，无需提示 */
+    }, function (e) { toast("定位失败：" + errText(e), true); });
+  }
+
+  /* ================= 在线工具：独立窗口在线打开 / 移除 ================= */
+  function openWebTool(item) {
+    if (!host) { return; }
+    host.callManager("manager.openWebTool", { webId: item.id }).then(function () {
+      refreshLauncher();
+    }, function (e) { toast("打开失败：" + errText(e), true); });
+  }
+
+  function deleteWebTool(item) {
+    if (!confirm("确定删除在线工具「" + item.name + "」？\n（只删除本条网址，不影响目标网站）")) { return; }
+    host.callManager("manager.deleteWebTool", { webId: item.id }).then(function () {
+      toast("已删除 " + item.name);
+      refreshLauncher();
+    }, function (e) { toast("删除失败：" + errText(e), true); });
+  }
+
+  /* ================= 添加在线工具（录入网址） ================= */
+  function showWebView() {
+    $("web-status").textContent = "";
+    ["web-name", "web-url", "web-category", "web-glyph"].forEach(function (id) {
+      var el = $(id);
+      if (el) { el.value = ""; }
+    });
+    showView("web-view");
+    $("web-name").focus();
+  }
+
+  function submitWebTool() {
+    if (!host) { toast("桥接不可用", true); return; }
+    var name = $("web-name").value.trim();
+    var url = $("web-url").value.trim();
+    if (!name) { toast("请填写名称", true); $("web-name").focus(); return; }
+    if (!url) { toast("请填写网址", true); $("web-url").focus(); return; }
+    if (!/^https?:\/\//i.test(url)) { url = "https://" + url; }
+
+    $("web-status").textContent = "保存中…";
+    host.callManager("manager.addWebTool", {
+      name: name,
+      url: url,
+      category: $("web-category").value.trim() || null,
+      glyph: $("web-glyph").value.trim() || null
+    }).then(function () {
+      toast("已添加在线工具「" + name + "」");
+      if (isContentMode) { closeContent(); }
+      else { showView("content-home"); }
+      refreshLauncher();
+    }, function (e) {
+      $("web-status").textContent = "";
+      toast("保存失败：" + errText(e), true);
+    });
   }
 
   /* ================= 版本管理 ================= */
@@ -877,6 +1095,9 @@
     var tag = target && target.tagName;
     var typing = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || (target && target.isContentEditable);
 
+    /* 右键原位菜单优先响应 Escape（其余键盘流不动） */
+    if (e.key === "Escape" && openMenuState) { closeItemMenu(); return; }
+
     /* 任意位置按 / 快速聚焦搜索（输入框内除外） */
     if (e.key === "/" && !typing && !e.ctrlKey && !e.metaKey && !e.altKey) {
       var search = $("search");
@@ -897,6 +1118,15 @@
       }
     }
   });
+
+  /* 点击菜单外的第一下只收起菜单，不触发下面条目的动作（捕获阶段拦截） */
+  document.addEventListener("click", function (e) {
+    if (!openMenuState) { return; }
+    if (openMenuState.li && typeof openMenuState.li.contains === "function" && openMenuState.li.contains(e.target)) { return; }
+    closeItemMenu();
+    if (e.preventDefault) { e.preventDefault(); }
+    if (e.stopPropagation) { e.stopPropagation(); }
+  }, true);
 
   /* ================= 内嵌工具栏 / 取消按钮 ================= */
   on("tool-close", "click", function () {
@@ -922,6 +1152,22 @@
   on("create-tool", "click", function () {
     if (isContentMode) { showCreateView(); }
     else { openContentPanel("create"); }
+  });
+  on("add-web", "click", function () {
+    if (isContentMode) { showWebView(); }
+    else { openContentPanel("web"); }
+  });
+  on("web-cancel", "click", function () {
+    if (isContentMode) { closeContent(); return; }
+    if (currentTool) { showView("tool-view"); }
+    else { showView("content-home"); }
+  });
+  on("web-save", "click", submitWebTool);
+  on("web-name", "keydown", function (e) {
+    if (e.key === "Enter") { e.preventDefault(); $("web-url").focus(); }
+  });
+  on("web-url", "keydown", function (e) {
+    if (e.key === "Enter") { e.preventDefault(); submitWebTool(); }
   });
   on("create-cancel", "click", function () {
     cancelVisibleStream("create");
@@ -961,6 +1207,8 @@
           showCreateView();
         } else if (view === "import") {
           showImportView();
+        } else if (view === "web") {
+          showWebView();
         } else {
           showView("content-home");
         }

@@ -114,8 +114,10 @@ public sealed class UnifiedLauncherBridgeTests : IDisposable
         Assert.Equal("program", items[0].GetProperty("kind").GetString());
         Assert.Equal(2, items[0].GetProperty("useCount").GetInt32());
         Assert.True(items[0].GetProperty("targetExists").GetBoolean());
+        Assert.Equal(_indexTarget, items[0].GetProperty("target").GetString());
         Assert.Equal("app", items[1].GetProperty("kind").GetString());
         Assert.Equal(0, items[1].GetProperty("useCount").GetInt32());
+        Assert.Equal(manualTarget, items[1].GetProperty("target").GetString());
 
         var index = result.GetProperty("index");
         Assert.False(index.GetProperty("indexing").GetBoolean());
@@ -138,6 +140,37 @@ public sealed class UnifiedLauncherBridgeTests : IDisposable
     {
         var response = await DispatchAsync("manager.launchApp", new { appId = "nope" }, BridgeDispatcher.HostToolId);
         Assert.Equal("APP_NOT_FOUND", ErrorCode(response));
+    }
+
+    [Fact]
+    public async Task RevealItemIsHostOnly()
+    {
+        var response = await DispatchAsync("manager.revealItem", new { kind = "app", id = "x" }, "evil");
+        Assert.Equal("PERMISSION_DENIED", ErrorCode(response));
+    }
+
+    [Fact]
+    public async Task RevealItemRejectsUnknownKind()
+    {
+        var response = await DispatchAsync("manager.revealItem", new { kind = "bogus", id = "x" }, BridgeDispatcher.HostToolId);
+        Assert.Equal("BRIDGE_BAD_REQUEST", ErrorCode(response));
+    }
+
+    [Fact]
+    public async Task RevealItemRejectsUnknownId()
+    {
+        var response = await DispatchAsync("manager.revealItem", new { kind = "program", id = "nope" }, BridgeDispatcher.HostToolId);
+        Assert.Equal("ITEM_NOT_FOUND", ErrorCode(response));
+    }
+
+    [Fact]
+    public async Task RevealItemRejectsMissingTarget()
+    {
+        // 目标不存在的启动项可以录入（列表标红），但「属性」定位必须给明确错误而不是弹资源管理器
+        var app = await _appStore.AddAsync("幽灵", Path.Combine(_root, "ghost.exe"),
+            null, null, null, null, CancellationToken.None);
+        var response = await DispatchAsync("manager.revealItem", new { kind = "app", id = app.Id }, BridgeDispatcher.HostToolId);
+        Assert.Equal("APP_TARGET_NOT_FOUND", ErrorCode(response));
     }
 
     [Fact]

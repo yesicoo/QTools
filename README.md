@@ -22,19 +22,21 @@ Windows 下需要 [WebView2 Runtime（Evergreen）](https://developer.microsoft.
 
 ## 统一启动器
 
-主窗口是一个细长条列表，三类入口混排、统一搜索：
+主窗口是一个细长条列表，四类入口混排、统一搜索：
 
 | 来源 | 说明 |
 |---|---|
 | **小工具** | 宿主托管的工具（内置示例 + AI 创建 + 导入） |
 | **手动启动项** | 「添加程序」手动挑选：可执行文件路径 + 可选启动参数 / 工作目录 / 分类 / 图标字符 |
 | **自动索引程序** | 启动后后台扫描开始菜单（含所有用户）与桌面，自动出现在列表里 |
+| **在线工具** | 「添加网址」录入 URL 保存；点击用独立 WebView 窗口在线打开（不注入宿主桥接，与本地能力完全隔离） |
 
 - **使用频次排序**：用得多的排前面；次数相同按最近使用，没用过的按名称。
 - **拼音搜索**：输入 `wx` 能搜到「微信」。
 - **真实图标**：自动提取程序图标并缓存；失败回退字母头像。
 - **索引不空窗**：后台重新扫描期间旧索引始终可用，扫描完成后原子覆盖；同一程序的多个快捷方式（开始菜单 / 桌面 / 厂商子目录）会按**解析出的真实目标**去重，卸载器、帮助文档等垃圾快捷方式自动过滤。
-- 手动启动项只保存**启动配置**，「移除」不会卸载系统里的程序。
+- 手动启动项只保存**启动配置**，「移除」不会卸载系统里的程序；在线工具同样只存一条网址，删除不影响目标网站。
+- **右键原位菜单**：右键任意条目，原位置带动画切换为「详情 / 属性 / 删除（移除 / 隐藏）」菜单；一次只开一个，点别处或按 Esc 还原。详情原位展开名称、目标、使用次数等；「属性」在资源管理器中定位文件；索引程序的「隐藏」持久化（`data/hidden-programs.json`），重新索引也不会再出现，且不会改动程序本身。
 
 ## AI 创建工具
 
@@ -109,7 +111,7 @@ dotnet run --project src/QTools.Host -r win-x64
 # 无头自检：起真实 Kestrel 服务，27 项 HTTP 断言，退出码 0 = 全过
 dotnet run --project src/QTools.Host -r win-x64 -- --self-test
 
-dotnet test                      # 319 个单元/集成测试
+dotnet test                      # 354 个单元/集成测试
 node --test tests/app.test.cjs   # 前端行为级测试（vm 沙箱 + DOM shim）
 
 # Native AOT 单文件发布（用户实际运行的形态）
@@ -147,6 +149,7 @@ dotnet publish src/QTools.Host/QTools.Host.csproj -c Release -r win-x64 -o publi
 ```
 <数据根目录>/
 ├── apps/                          # 手动启动项（每个一个 app.json）
+├── webtools/                      # 在线工具（每个一个 web.json，只存名称与网址）
 ├── tools/                         # 用户工具（tools/{id}/manifest.json + index.html + files/ + .versions/）
 └── data/
     ├── config.json                # 宿主配置（不含 API Key）
@@ -201,8 +204,8 @@ dotnet publish src/QTools.Host/QTools.Host.csproj -c Release -r win-x64 -o publi
 
 | 层 | 命令 | 数量 | 覆盖 |
 |---|---|---|---|
-| 单元/集成 | `dotnet test` | 319 | manifest 校验、桥接协议（真实 `BridgeDispatcher`）、权限、存储隔离、AI 解析容错、安全审查、备份/Git、索引原子覆盖与去重、流式取消 |
-| 前端行为 | `node --test tests/*.cjs` | 108 | `app.js` / `bridge.js` / 示例工具页面（vm 沙箱 + DOM shim） |
+| 单元/集成 | `dotnet test` | 354 | manifest 校验、桥接协议（真实 `BridgeDispatcher`）、权限、存储隔离、AI 解析容错、安全审查、备份/Git、索引原子覆盖与去重、流式取消 |
+| 前端行为 | `node --test tests/*.cjs` | 116 | `app.js` / `bridge.js` / 示例工具页面（vm 沙箱 + DOM shim） |
 | HTTP 自检 | `--self-test` | 27 | 真起 Kestrel：Host 校验、路径穿越、工具资源、设置页、品牌图标 |
 
 ## 已知 AOT 约束
@@ -241,8 +244,8 @@ src/QTools.Host/
 ├── Storage/                按 toolId 隔离的 JSON 键值存储
 ├── Tools/                  manifest 校验 / 版本管理 / 扫描 / 示例工具释放
 └── Assets/host-ui/         主窗口与设置页（原生 HTML/CSS/JS，无框架无构建）
-tests/QTools.Tests/         319 个单元 + 内存级集成测试
-tests/*.test.cjs            108 个前端行为级测试
+tests/QTools.Tests/         354 个单元 + 内存级集成测试
+tests/*.test.cjs            116 个前端行为级测试
 ```
 
 ## 给开发者

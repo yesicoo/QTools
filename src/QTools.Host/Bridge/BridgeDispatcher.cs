@@ -37,9 +37,12 @@ public sealed class BridgeDispatcher
     private readonly Launcher.AppRegistry? _apps;
     private readonly Launcher.AppLauncher? _launcher;
     private readonly Launcher.AppStore? _appStore;
+    private readonly Launcher.WebToolRegistry? _webTools;
+    private readonly Launcher.WebToolStore? _webToolStore;
     private readonly Launcher.ProgramDiscovery? _discovery;
     private readonly Launcher.ProgramIndex? _programIndex;
     private readonly Launcher.UsageStore? _usage;
+    private readonly Launcher.HiddenProgramStore? _hiddenPrograms;
     private readonly Backup.BackupService? _backup;
     private readonly Backup.GitBackup? _gitBackup;
 
@@ -70,7 +73,10 @@ public sealed class BridgeDispatcher
         Backup.BackupService? backup = null,
         Backup.GitBackup? gitBackup = null,
         Launcher.ProgramIndex? programIndex = null,
-        Launcher.UsageStore? usage = null)
+        Launcher.UsageStore? usage = null,
+        Launcher.WebToolRegistry? webTools = null,
+        Launcher.WebToolStore? webToolStore = null,
+        Launcher.HiddenProgramStore? hiddenPrograms = null)
     {
         _tools = tools;
         _storage = storage;
@@ -81,11 +87,14 @@ public sealed class BridgeDispatcher
         _apps = apps;
         _launcher = launcher;
         _appStore = appStore;
+        _webTools = webTools;
+        _webToolStore = webToolStore;
         _discovery = discovery;
         _backup = backup;
         _gitBackup = gitBackup;
         _programIndex = programIndex;
         _usage = usage;
+        _hiddenPrograms = hiddenPrograms;
         RegisterMethods();
     }
 
@@ -165,6 +174,12 @@ public sealed class BridgeDispatcher
         Register("manager.pickProgram", LauncherMethods.PickProgramAsync, null, hostOnly: true);
         Register("manager.launcherList", LauncherMethods.LauncherListAsync, null, hostOnly: true);
         Register("manager.reindexPrograms", LauncherMethods.ReindexProgramsAsync, null, hostOnly: true);
+        Register("manager.addWebTool", LauncherMethods.AddWebToolAsync, null, hostOnly: true);
+        Register("manager.deleteWebTool", LauncherMethods.DeleteWebToolAsync, null, hostOnly: true);
+        Register("manager.openWebTool", LauncherMethods.OpenWebToolAsync, null, hostOnly: true);
+        Register("manager.hideProgram", LauncherMethods.HideProgramAsync, null, hostOnly: true);
+        Register("manager.unhideProgram", LauncherMethods.UnhideProgramAsync, null, hostOnly: true);
+        Register("manager.revealItem", LauncherMethods.RevealItemAsync, null, hostOnly: true);
         Register("manager.generateTool", ToolCreatorMethods.GenerateToolAsync, null, hostOnly: true);
         Register("manager.createTool", ToolCreatorMethods.CreateToolAsync, null, hostOnly: true);
         Register("manager.fixTool", ToolCreatorMethods.FixToolAsync, null, hostOnly: true);
@@ -318,9 +333,12 @@ public sealed class BridgeDispatcher
                 Apps = _apps,
                 Launcher = _launcher,
                 AppStore = _appStore,
+                WebTools = _webTools,
+                WebToolStore = _webToolStore,
                 Discovery = _discovery,
                 ProgramIndex = _programIndex,
                 Usage = _usage,
+                HiddenPrograms = _hiddenPrograms,
                 Backup = _backup,
                 GitBackup = _gitBackup,
                 CancellationToken = cts.Token,

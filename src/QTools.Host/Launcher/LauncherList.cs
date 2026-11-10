@@ -3,8 +3,9 @@ using QTools.Host.Tools;
 namespace QTools.Host.Launcher;
 
 /// <summary>
-/// 统一启动列表项：小工具（tool）、手动启动项（app）、自动索引程序（program）混排。
-/// Kind 决定前端点击行为：tool → 内容窗口；app/program → 直接启动。
+/// 统一启动列表项：小工具（tool）、手动启动项（app）、自动索引程序（program）、在线工具（web）混排。
+/// Kind 决定前端点击行为：tool → 内容窗口；app/program → 直接启动；web → 独立窗口在线打开。
+/// Target 供右键菜单「属性/详情」与「打开所在位置」使用：app/program → 本机目标路径，web → 网址，tool → 空。
 /// </summary>
 public sealed record LauncherItemView(
     string Id,
@@ -17,7 +18,8 @@ public sealed record LauncherItemView(
     bool TargetExists,
     int UseCount,
     string? Category,
-    string? Glyph);
+    string? Glyph,
+    string? Target = null);
 
 /// <summary>索引状态（列表附带，前端展示「索引中…」与上次完成时间）。</summary>
 public sealed record LauncherIndexStatus(bool Indexing, string? LastIndexedUtc, int ProgramCount);
@@ -31,13 +33,16 @@ public static class LauncherListBuilder
     public const string KindTool = "tool";
     public const string KindApp = "app";
     public const string KindProgram = "program";
+    public const string KindWeb = "web";
 
     public static LauncherListView Build(
         ToolRegistry tools,
         AppRegistry apps,
         ProgramIndex? index,
         UsageStore? usage,
-        string iconCacheDirectory)
+        string iconCacheDirectory,
+        WebToolRegistry? webTools = null,
+        HiddenProgramStore? hiddenPrograms = null)
     {
         var rows = new List<(LauncherItemView Item, string LastUsed)>();
 
@@ -54,6 +59,7 @@ public static class LauncherListBuilder
                 tool.IsValid,
                 true,
                 used?.Count ?? 0,
+                null,
                 null,
                 null), used?.LastUsedUtc ?? ""));
         }
@@ -78,7 +84,8 @@ public static class LauncherListBuilder
                 app.TargetExists,
                 used?.Count ?? 0,
                 app.Entry.Category,
-                app.Entry.Glyph), used?.LastUsedUtc ?? ""));
+                app.Entry.Glyph,
+                app.Entry.Target), used?.LastUsedUtc ?? ""));
         }
 
         if (index is not null)
@@ -87,6 +94,12 @@ public static class LauncherListBuilder
             {
                 // 手动启动项优先：同一目标已被手动添加时不再重复展示索引项
                 if (manualTargets.Contains(entry.Target))
+                {
+                    continue;
+                }
+
+                // 用户右键隐藏过的索引程序不再出现在列表里（记录持久化，跨重新索引保留）
+                if (hiddenPrograms is not null && hiddenPrograms.IsHidden(entry.Id))
                 {
                     continue;
                 }
@@ -104,7 +117,29 @@ public static class LauncherListBuilder
                     File.Exists(entry.Target) || Directory.Exists(entry.Target),
                     used?.Count ?? 0,
                     entry.Category,
-                    null), used?.LastUsedUtc ?? ""));
+                    null,
+                    entry.Target), used?.LastUsedUtc ?? ""));
+            }
+        }
+
+        if (webTools is not null)
+        {
+            foreach (var web in webTools.GetAll())
+            {
+                var used = usage?.Get(web.Id);
+                rows.Add((new LauncherItemView(
+                    web.Id,
+                    KindWeb,
+                    web.Name,
+                    null,
+                    null,
+                    Text.PinyinInitials.BuildSearchKey(web.Name, web.Id, web.Entry.Category, web.Entry.Url),
+                    web.IsValid,
+                    true,
+                    used?.Count ?? 0,
+                    web.Entry.Category,
+                    web.Entry.Glyph,
+                    web.Entry.Url), used?.LastUsedUtc ?? ""));
             }
         }
 

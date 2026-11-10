@@ -86,11 +86,20 @@ public sealed class BridgeContext
     /// <summary>启动项存储（manager.addApp / deleteApp 用）。</summary>
     public Launcher.AppStore? AppStore { get; init; }
 
+    /// <summary>在线工具注册表（manager.openWebTool / launcherList 用）。</summary>
+    public Launcher.WebToolRegistry? WebTools { get; init; }
+
+    /// <summary>在线工具存储（manager.addWebTool / deleteWebTool 用）。</summary>
+    public Launcher.WebToolStore? WebToolStore { get; init; }
+
     /// <summary>本机程序扫描器（manager.discoverPrograms 用）。</summary>
     public Launcher.ProgramDiscovery? Discovery { get; init; }
 
     /// <summary>本机程序自动索引（manager.launcherList / reindexPrograms / launchApp 回退用）。</summary>
     public Launcher.ProgramIndex? ProgramIndex { get; init; }
+
+    /// <summary>索引程序隐藏列表（manager.hideProgram / unhideProgram 用）。</summary>
+    public Launcher.HiddenProgramStore? HiddenPrograms { get; init; }
 
     /// <summary>使用频次统计（列表排序 + 启动/打开计数用）。</summary>
     public Launcher.UsageStore? Usage { get; init; }
