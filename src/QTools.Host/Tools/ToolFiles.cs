@@ -204,7 +204,13 @@ public sealed record FileContent(string Name, byte[] Data, string ContentType);
 public sealed record FilesSavePayload(string Name, string DataBase64, string? ContentType);
 
 /// <summary>manager.importTool 的载荷。</summary>
-public sealed record ImportToolPayload(string Name, string Html, string? Description, bool AcceptHighSeverity);
+public sealed record ImportToolPayload(
+    string Name,
+    string Html,
+    string? Description,
+    bool AcceptHighSeverity,
+    string? Category = null,
+    string? Glyph = null);
 
 /// <summary>manager.listVersions 的结果。</summary>
 public sealed record ToolVersionView(string Version, string CreatedAt, long SizeBytes, bool IsActive, string? Note);

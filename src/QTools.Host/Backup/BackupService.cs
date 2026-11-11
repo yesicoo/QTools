@@ -29,7 +29,8 @@ public sealed record BackupConfigView(
     string? LastPushStatus,
     bool HotkeyEnabled,
     bool HotkeySupported,
-    bool HotkeyRegistered);
+    bool HotkeyRegistered,
+    int TrayMenuItems);
 
 /// <summary>manager.importBackupFile 结果（用户取消对话框时 name 为 null）。</summary>
 public sealed record ImportBackupResult(string? Name);

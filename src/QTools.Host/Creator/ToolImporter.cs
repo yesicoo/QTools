@@ -42,11 +42,13 @@ public sealed class ToolImporter
         bool RequiresExplicitAcceptance,
         IReadOnlyList<string> ExternalAssets);
 
-    /// <summary>导入一个本地 HTML 文件为工具。</summary>
+    /// <summary>导入一个本地 HTML 文件为工具（描述 / 分类 / 自定义图标与在线工具表单保持同一套字段）。</summary>
     public async System.Threading.Tasks.Task<ImportResult> ImportAsync(
         string name,
         string html,
         string? description,
+        string? category,
+        string? glyph,
         bool acceptHighSeverity,
         System.Threading.CancellationToken cancellationToken)
     {
@@ -66,6 +68,24 @@ public sealed class ToolImporter
             throw new BridgeException("IMPORT_HTML_REQUIRED", "HTML 内容为空");
         }
 
+        description = string.IsNullOrWhiteSpace(description) ? null : description.Trim();
+        if (description is { Length: > 300 })
+        {
+            throw new BridgeException("IMPORT_DESCRIPTION_TOO_LONG", "描述不超过 300 字符");
+        }
+
+        category = string.IsNullOrWhiteSpace(category) ? null : category.Trim();
+        if (category is { Length: > 30 })
+        {
+            throw new BridgeException("IMPORT_CATEGORY_TOO_LONG", "分类不超过 30 字符");
+        }
+
+        glyph = string.IsNullOrWhiteSpace(glyph) ? null : glyph.Trim();
+        if (glyph is { Length: > 4 })
+        {
+            throw new BridgeException("IMPORT_GLYPH_TOO_LONG", "自定义图标不超过 4 字符");
+        }
+
         var htmlBytes = Encoding.UTF8.GetByteCount(html);
         if (htmlBytes > MaxHtmlBytes)
         {
@@ -82,13 +102,17 @@ public sealed class ToolImporter
             GenerateToolId(name),
             name,
             "1.0.0",
-            string.IsNullOrWhiteSpace(description) ? null : description.Trim(),
+            description,
             "index.html",
             permissions,
             new ToolWindowSettings(DefaultWindowWidth, DefaultWindowHeight, true),
             DateTimeOffset.Now.ToString("o"),
             AllowEval: false,
-            Csp: null);
+            Csp: null)
+        {
+            Category = category,
+            Glyph = glyph,
+        };
 
         var (findings, hasFatal) = ContentSecurityScanner.Scan(manifest, html);
 

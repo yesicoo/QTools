@@ -374,10 +374,11 @@ test('添加网址：内容窗口保存自动补 https，主模式按钮打开�
   h.view('web-view');
   h.el('web-name').value = ' 资讯站 ';
   h.el('web-url').value = 'example.com/news';
+  h.el('web-desc').value = ' 行业资讯 ';
   h.el('web-category').value = ' 资讯 ';
   h.click('web-save');
   assert.deepEqual(plain(h.last('addWebTool').payload), {
-    name: '资讯站', url: 'https://example.com/news', category: '资讯', glyph: null
+    name: '资讯站', url: 'https://example.com/news', description: '行业资讯', category: '资讯', glyph: null
   });
   await h.reply('addWebTool', { ok: true });
   assert.match(h.el('toast').textContent, /已添加在线工具「资讯站」/);
@@ -553,6 +554,30 @@ test('重命名：失败恢复确认按钮并提示', async () => {
   assert.equal(renameOk(h, li).disabled, false, '失败后恢复确认');
   assert.match(h.el('toast').textContent, /重命名失败/);
   assert.equal(renameForm(h, li).hidden, false, '失败后表单仍在');
+});
+
+test('列表悬停提示描述，小工具徽标/图标使用分类与自定义图标', async () => {
+  const list = [
+    item({ id: 'a', kind: 'tool', name: '工具a', version: '1.2.3', category: '效率', glyph: '🧮', description: '四则运算', searchKey: '工具a a' }),
+    item({ id: 'site', kind: 'web', name: '资讯站', description: '每日要闻', searchKey: '资讯站', category: '资讯' })
+  ];
+  const h = await setup({ list });
+
+  const toolBtn = h.navItem('tool:a');
+  assert.match(toolBtn.title, /^四则运算\n工具a（小工具，右键管理）$/);
+  assert.equal(toolBtn.children[0].textContent, '🧮', '自定义图标优先于内置图标');
+  assert.equal(badgeOf(toolBtn).textContent, '效率', '有分类时徽标显示分类而不是版本');
+
+  const webBtn = h.navItem('web:site');
+  assert.match(webBtn.title, /^每日要闻\n资讯站（在线工具，右键管理）$/);
+
+  // 详情原位展开也展示描述
+  toolBtn.fire('contextmenu', { preventDefault() {} });
+  const li = h.liOf('tool:a');
+  h.menuAction(li, 0).click();
+  const detail = h.menuOf(li).children[1];
+  const descRow = detail.children.find(kv => kv.children[0] && kv.children[0].textContent === '描述');
+  assert.equal(descRow.children[1].textContent, '四则运算');
 });
 
 test('本机程序菜单不含「重命名」（小工具与在线工具才有）', async () => {
@@ -756,13 +781,20 @@ test('重新打开导入面板会清空上次选择的文件', async () => {
 test('读取文件及导入期间禁用重复提交并锁定审查输入', async () => {
   const h = await setup({ mode: 'content', view: 'import' });
   h.el('import-name').value = '导入测试';
+  h.el('import-desc').value = ' 测试工具 ';
+  h.el('import-category').value = ' 效率 ';
+  h.el('import-glyph').value = ' 🧮 ';
   h.el('import-file').files = [{ name: 'test.html', html: '<h1>测试</h1>' }];
   h.click('import-run');
   assert.equal(h.el('import-run').disabled, true);
   h.click('import-run');
   await flush();
   assert.equal(h.requests('importTool').length, 1);
+  assert.equal(h.last('importTool').payload.description, '测试工具');
+  assert.equal(h.last('importTool').payload.category, '效率');
+  assert.equal(h.last('importTool').payload.glyph, '🧮');
   assert.equal(h.el('import-file').disabled, true);
+  assert.equal(h.el('import-category').disabled, true);
   assert.equal(h.el('import-confirm').disabled, true);
   await h.reply('importTool', { saved: false, findings: [], permissions: [], toolId: 'test' });
   assert.equal(h.el('import-run').disabled, false);
@@ -776,7 +808,7 @@ test('读取文件及导入期间禁用重复提交并锁定审查输入', async
   assert.equal(h.requests('listTools').length, 2);
 });
 
-for (const id of ['import-name', 'import-desc', 'import-file']) {
+for (const id of ['import-name', 'import-desc', 'import-category', 'import-glyph', 'import-file']) {
   test(`修改${id}后隐藏旧审查并禁止直接确认`, async () => {
     const h = await setup({ mode: 'content', view: 'import' });
     h.el('import-name').value = '旧名称';

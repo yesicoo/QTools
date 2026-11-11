@@ -200,8 +200,13 @@ public sealed class BridgeDispatcher
         Register("manager.gitPush", BackupMethods.GitPushAsync, null, hostOnly: true);
         Register("manager.gitRestore", BackupMethods.GitRestoreAsync, null, hostOnly: true);
         Register("manager.setHotkeyEnabled", ShellMethods.SetHotkeyEnabledAsync, null, hostOnly: true);
+        Register("manager.setTrayMenuItems", ShellMethods.SetTrayMenuItemsAsync, null, hostOnly: true);
         Register("manager.openContent", ShellMethods.OpenContentAsync, null, hostOnly: true);
         Register("manager.closeContent", ShellMethods.CloseContentAsync, null, hostOnly: true);
+        Register("manager.trayMenuList", ShellMethods.TrayMenuListAsync, null, hostOnly: true);
+        Register("manager.trayMenuReady", ShellMethods.TrayMenuReadyAsync, null, hostOnly: true);
+        Register("manager.hideTrayMenu", ShellMethods.HideTrayMenuAsync, null, hostOnly: true);
+        Register("manager.exitApp", ShellMethods.ExitAppAsync, null, hostOnly: true);
     }
 
     private void Register(

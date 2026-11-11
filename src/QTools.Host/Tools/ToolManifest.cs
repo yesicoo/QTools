@@ -37,7 +37,14 @@ public sealed record ToolManifest(
     ToolWindowSettings Window,
     string CreatedAt,
     bool AllowEval,
-    string? Csp);
+    string? Csp)
+{
+    /// <summary>分类（可选，列表徽标展示；导入时可填，AI 创建默认留空）。</summary>
+    public string? Category { get; init; }
+
+    /// <summary>自定义图标字符（可选，最多 4 字符；留空按工具名生成）。</summary>
+    public string? Glyph { get; init; }
+}
 
 /// <summary>manifest 静态校验规则（纯函数，便于单测）。</summary>
 public static partial class ToolManifestValidator
@@ -84,6 +91,16 @@ public static partial class ToolManifestValidator
         if (manifest.Description is { Length: > 300 })
         {
             errors.Add("description 不超过 300 字符");
+        }
+
+        if (manifest.Category is { Length: > 30 })
+        {
+            errors.Add("category 不超过 30 字符");
+        }
+
+        if (manifest.Glyph is { Length: > 4 })
+        {
+            errors.Add("glyph 不超过 4 字符");
         }
 
         if (string.IsNullOrWhiteSpace(manifest.Entry))

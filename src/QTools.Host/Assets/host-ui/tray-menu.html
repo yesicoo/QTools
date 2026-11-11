@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="/__host__/icon.png">
+  <title>QTools 托盘菜单</title>
+  <link rel="stylesheet" href="/__host__/tray-menu.css">
+</head>
+<body>
+  <main class="tray-panel">
+    <div class="tray-head">快捷启动</div>
+    <div id="tray-list" class="tray-list"></div>
+    <div id="tray-empty" class="tray-empty" hidden>暂无工具</div>
+    <button id="tray-exit" class="tray-exit" type="button">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+        <path d="M12 3v9"/><path d="M6.6 6.6a8 8 0 1 0 10.8 0"/>
+      </svg>
+      <span>退出 QTools</span>
+    </button>
+  </main>
+  <script src="/__host__/tray-menu.js" defer></script>
+</body>
+</html>

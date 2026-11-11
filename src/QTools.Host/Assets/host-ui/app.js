@@ -192,9 +192,9 @@
     var isTool = item.kind === "tool";
     var isWeb = item.kind === "web";
     var broken = isWeb ? !item.isValid : (isTool ? !item.isValid : !item.targetExists);
-    var glyph = isTool ? iconFor(item.id, item.name) : appGlyph(item);
+    var glyph = isTool ? (item.glyph || iconFor(item.id, item.name)) : appGlyph(item);
     var badge = isTool
-      ? (item.isValid ? "v" + (item.version || "") : "manifest 无效")
+      ? (item.isValid ? (item.category || "v" + (item.version || "")) : "manifest 无效")
       : isWeb
         ? (!item.isValid ? "配置无效" : (item.category || ""))
         : (!item.targetExists ? "目标不存在" : (item.category || ""));
@@ -204,7 +204,8 @@
     btn.type = "button";
     btn.className = "nav-item" + (!isTool ? " app-item" : "") + (broken ? " broken" : "");
     btn.dataset.key = item.kind + ":" + item.id;
-    btn.title = item.name + "（" + kindLabel(item.kind) + "，右键管理）";
+    btn.title = (item.description ? item.description + "\n" : "") +
+      item.name + "（" + kindLabel(item.kind) + "，右键管理）";
 
     var g = document.createElement("span");
     g.className = "nav-glyph";
@@ -556,7 +557,9 @@
         ? (item.isValid ? "正常" : "manifest 无效")
         : (item.targetExists ? "正常" : "目标不存在");
 
-    var rows = [["名称", item.name], ["类型", kindLabel(item.kind)], ["ID", item.id]];
+    var rows = [["名称", item.name], ["类型", kindLabel(item.kind)]];
+    if (item.description) { rows.push(["描述", item.description]); }
+    rows.push(["ID", item.id]);
     if (item.kind === "tool" && item.version) { rows.push(["版本", "v" + item.version]); }
     if (item.category) { rows.push(["类别", item.category]); }
     if (item.target) { rows.push([item.kind === "web" ? "网址" : "目标", item.target]); }
@@ -605,7 +608,7 @@
   /* ================= 添加在线工具（录入网址） ================= */
   function showWebView() {
     $("web-status").textContent = "";
-    ["web-name", "web-url", "web-category", "web-glyph"].forEach(function (id) {
+    ["web-name", "web-url", "web-desc", "web-category", "web-glyph"].forEach(function (id) {
       var el = $(id);
       if (el) { el.value = ""; }
     });
@@ -625,6 +628,7 @@
     host.callManager("manager.addWebTool", {
       name: name,
       url: url,
+      description: $("web-desc").value.trim() || null,
       category: $("web-category").value.trim() || null,
       glyph: $("web-glyph").value.trim() || null
     }).then(function () {
@@ -904,7 +908,7 @@
   /* ================= 导入本地 HTML ================= */
   function setImportBusy(value) {
     importing = value;
-    ["import-run", "import-confirm", "import-file", "import-name", "import-desc"].forEach(function (id) {
+    ["import-run", "import-confirm", "import-file", "import-name", "import-desc", "import-category", "import-glyph"].forEach(function (id) {
       var el = $(id);
       if (el) { el.disabled = value; }
     });
@@ -921,6 +925,8 @@
     $("import-file-name").classList.remove("set");
     $("import-name").value = "";
     $("import-desc").value = "";
+    $("import-category").value = "";
+    $("import-glyph").value = "";
     pendingImport = null;
     showView("import-view");
   }
@@ -972,6 +978,8 @@
       name: pendingImport.name,
       html: pendingImport.html,
       description: $("import-desc").value.trim() || null,
+      category: $("import-category").value.trim() || null,
+      glyph: $("import-glyph").value.trim() || null,
       acceptHighSeverity: !!acceptHighSeverity
     }).then(function (r) {
       if (r.saved) {
@@ -1036,7 +1044,7 @@
     pendingImport = null;
     $("import-review").hidden = true;
   });
-  ["import-name", "import-desc"].forEach(function (id) {
+  ["import-name", "import-desc", "import-category", "import-glyph"].forEach(function (id) {
     on(id, "input", function () {
       pendingImport = null;
       $("import-review").hidden = true;

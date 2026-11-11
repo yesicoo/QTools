@@ -6,6 +6,7 @@ namespace QTools.Host.Launcher;
 /// 统一启动列表项：小工具（tool）、手动启动项（app）、自动索引程序（program）、在线工具（web）混排。
 /// Kind 决定前端点击行为：tool → 内容窗口；app/program → 直接启动；web → 独立窗口在线打开。
 /// Target 供右键菜单「属性/详情」与「打开所在位置」使用：app/program → 本机目标路径，web → 网址，tool → 空。
+/// Description 供列表悬停提示：小工具取 manifest.description，在线工具取 web.json 的 description。
 /// </summary>
 public sealed record LauncherItemView(
     string Id,
@@ -19,7 +20,8 @@ public sealed record LauncherItemView(
     int UseCount,
     string? Category,
     string? Glyph,
-    string? Target = null);
+    string? Target = null,
+    string? Description = null);
 
 /// <summary>索引状态（列表附带，前端展示「索引中…」与上次完成时间）。</summary>
 public sealed record LauncherIndexStatus(bool Indexing, string? LastIndexedUtc, int ProgramCount);
@@ -59,9 +61,10 @@ public static class LauncherListBuilder
                 tool.IsValid,
                 true,
                 used?.Count ?? 0,
+                tool.Manifest.Category,
+                tool.Manifest.Glyph,
                 null,
-                null,
-                null), used?.LastUsedUtc ?? ""));
+                tool.Manifest.Description), used?.LastUsedUtc ?? ""));
         }
 
         var manualTargets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -85,7 +88,8 @@ public static class LauncherListBuilder
                 used?.Count ?? 0,
                 app.Entry.Category,
                 app.Entry.Glyph,
-                app.Entry.Target), used?.LastUsedUtc ?? ""));
+                app.Entry.Target,
+                null), used?.LastUsedUtc ?? ""));
         }
 
         if (index is not null)
@@ -118,7 +122,8 @@ public static class LauncherListBuilder
                     used?.Count ?? 0,
                     entry.Category,
                     null,
-                    entry.Target), used?.LastUsedUtc ?? ""));
+                    entry.Target,
+                    null), used?.LastUsedUtc ?? ""));
             }
         }
 
@@ -133,13 +138,15 @@ public static class LauncherListBuilder
                     web.Name,
                     null,
                     null,
-                    Text.PinyinInitials.BuildSearchKey(web.Name, web.Id, web.Entry.Category, web.Entry.Url),
+                    Text.PinyinInitials.BuildSearchKey(
+                        web.Name, web.Id, web.Entry.Category, web.Entry.Url, web.Entry.Description),
                     web.IsValid,
                     true,
                     used?.Count ?? 0,
                     web.Entry.Category,
                     web.Entry.Glyph,
-                    web.Entry.Url), used?.LastUsedUtc ?? ""));
+                    web.Entry.Url,
+                    web.Entry.Description), used?.LastUsedUtc ?? ""));
             }
         }
 

@@ -2,6 +2,7 @@ using System.Text.Json;
 using Photino.NET;
 using QTools.Host.Cli;
 using QTools.Host.Configuration;
+using QTools.Host.Launcher;
 using QTools.Host.Logging;
 using QTools.Host.Native;
 using QTools.Host.Serialization;
@@ -93,6 +94,7 @@ internal static class Program
             }
 
             var shell = new ShellHost(new PhotinoApplication(), server.Tools, server.Storage, server.Dispatcher);
+            ConfigureTray(shell, server);
 
             // 后台索引完成 → 主窗口统一列表自动刷新（旧索引在扫描期间持续可用）
             server.ProgramIndex.Completed += shell.NotifyLauncherChanged;
@@ -131,6 +133,31 @@ internal static class Program
         {
             Log.Shutdown();
         }
+    }
+
+    /// <summary>
+    /// 托盘菜单：前 N 项（默认 10，可配置 1–20）取自统一列表（与界面同一排序/过滤），由 HTML 弹层渲染；
+    /// 点击条目走与界面相同的 manager.openContent / openWebTool / launchApp，「退出 QTools」走 manager.exitApp。
+    /// </summary>
+    private static void ConfigureTray(ShellHost shell, Server.LocalServer server)
+    {
+        shell.TrayEntriesProvider = () =>
+        {
+            // 每次右键实时读配置：设置页改数量后无需重开应用
+            var config = QTools.Host.Ai.ConfigStore.Load(
+                QTools.Host.Configuration.AppPaths.ConfigFilePath);
+            var count = TrayMenuPlanner.ResolveCount(config.Shell?.TrayMenuItems);
+            return TrayMenuPlanner.FromLauncherItems(
+                LauncherListBuilder.Build(
+                    server.Tools,
+                    server.Apps,
+                    server.ProgramIndex,
+                    server.Usage,
+                    QTools.Host.Configuration.AppPaths.IconCacheDirectory,
+                    server.WebTools,
+                    server.HiddenPrograms).Items,
+                count);
+        };
     }
 
     /// <summary>
@@ -272,7 +299,7 @@ internal static class Program
                 shell.QueueToolToOpen(tool);
             }
 
-            shell.Run(server.Port, devMode: false);
+            shell.Run(server.Port, devMode: false, enableTray: false);
             return 0;
         }
         catch (Bridge.BridgeException ex)

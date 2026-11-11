@@ -38,7 +38,7 @@
 # 构建（Debug，够日常开发）
 dotnet build
 
-# 单元测试（当前基线 378 个）
+# 单元测试（当前基线 412 个）
 dotnet test
 
 # 开发运行（会开 GUI 窗口）
@@ -234,6 +234,20 @@ tests/QTools.Tests/         22 个测试文件，纯单元 + 内存级集成
 badge / 使用次数拆成表格列——条目结构保持「图标 / `.nav-label` / `.nav-badge`」的自适应卡片，
 右键原位菜单、重命名、隐藏/删除都依赖 `li` 内的原位切换。内容窗口（`mode-content`）不受影响。
 
+### 7.16 关闭主窗口 ≠ 退出（Windows 托盘）
+
+Windows 下主窗口 `Closing` 会先取消再收起到托盘（`Shell/TrayIcon.cs`：Shell_NotifyIcon + 独立 STA 消息线程；`ShellHost` 里 `_tray` 非空才拦截），只有菜单「退出 QTools」经 `manager.exitApp` 置 `_exitRequested` 后才放行关闭。左键托盘图标显示主窗体（不切换隐藏）；右键弹出**无边框 HTML 弹层**（`host-ui/tray-menu.html`，圆角 + 主题色，失焦/Esc 收起），前 N 项（默认 10，`shell.trayMenuItems` 配置 1–20，设置页可改）由 `TrayMenuPlanner` 按统一列表顺序实时读取并经 `manager.trayMenuList` 下发，点击走与界面一致的 `manager.openContent / openWebTool / launchApp`；条目过多时弹层高度夹到工作区、列表内部滚动。**约束**：`Closing` 里不要同步隐藏窗口（必须 marshal 到 UI 线程）；托盘线程不得直接操作 Photino 窗口；弹层是独立 Photino 窗口，必须 `AttachBridge` 后才会处理 `manager.*`；非 Windows 无托盘、关闭即退出；无头预览（`--generate-tool --yes` 的 `enableTray: false`）保持关闭即退出，避免自动化脚本挂在托盘上；资源管理器重启（`TaskbarCreated`）后必须重新 `NIM_ADD`。
+
+**弹层显示的坑（2026-11 修复）**：`RegisterInitialContentLoadedHandler` 按 PhotinoX 文档只在窗口**首次**导航完成时触发一次。弹层复用窗口每次右键都会 `Load(url)` 刷新列表，但该事件不再回调，导致页面明明加载了、窗口却一直隐藏（用户表现为「右键没菜单」）。**约束**：弹层显示以页面渲染完成后回传的 `manager.trayMenuReady` 为准（`tray-menu.js` → `ShellHost.NotifyTrayMenuReadyAsync` → `ShowTrayMenuWindowIfPending`），首次的 `InitialContentLoaded` 只当补充；`ShowTrayMenuAsync` 里另有 1.2s 兜底超时防止脚本异常时永远不显示。刚显示的弹层可能因前台锁拿不到焦点而立刻收到 `Deactivated`，`ShowTrayMenuWindowIfPending` 记录 `_trayMenuShownAt`，800ms 宽限期内忽略失焦（并显式 `SetForegroundWindow`）；宽限期后真正的失焦/切窗才收起。回归验证要直接查 Win32 `IsWindowVisible(弹层)`，不能只看 CDP 页面或截图——页面在隐藏窗口里也照样渲染。
+
+**DPI 坐标空间的坑（2026-11 修复）**：托盘消息线程运行在 96-DPI 虚拟化上下文，`GetCursorPos` 返回逻辑坐标；Photino 窗口所在 UI 线程是 DPI 感知的，`GetMonitorInfo` 返回物理像素，`MoveTo` 也按物理像素定位，而 `SetSize` 按 DIP→物理放大（150% 下 288 宽实际 432 像素）。在托盘线程取光标再拿到 UI 线程定位，会让弹层落在约 1/1.5 的位置（缩放屏上表现为「跑到屏幕中间」而不是托盘旁）。另外应用内实测 `GetScaleFactorForMonitor` 可能返回 140 而窗口 DPI 是 144，不可作为换算依据。**约束**：光标位置、显示器工作区、`GetDpiForMonitor` 一律在 UI 线程（`ShowTrayMenuAsync` 内）用物理坐标读取，弹层像素尺寸 = DIP × dpi/96，再交给 `TrayMenuPlacement.Compute` 与 `MoveTo`；不要在托盘线程换算坐标。
+
+### 7.17 窗口几何记忆（主窗口尺寸 + 内容窗口位置/尺寸，config.json）
+
+用户拖拽调整主窗口大小后，`RegisterSizeChangedHandler` 拿到的是 **DIP 尺寸**（与 `SetSize` 同一坐标空间，150% 缩放下 1700 物理像素对应 1133 DIP），防抖 500ms 后写入 `config.json` 的 `shell.mainWindowWidth/Height`；启动时 `MainWindowSize.Resolve` 校验范围（280×480 ～ 8000×6000，越界按维度回退默认 340×720），再按当前显示器工作区（DIP）夹一次。
+
+内容窗口（`OpenContentAsync`）另外记住 **位置（物理像素）+ 尺寸（DIP）**：`LocationChanged` / `SizeChanged` 防抖 500ms、关闭窗口时立即写入 `shell.contentWindowLeft/Top/Width/Height`；恢复时 `ContentWindowBounds.ResolveSize` 校验尺寸（560×420 ～ 8000×6000，默认 920×680），`ResolveContentWindowOrigin` 用 `MonitorFromPoint(MONITOR_DEFAULTTONULL)` 探测保存点是否仍在任一显示器上——失效则回退 `WindowDock` 贴主窗口。位置用物理像素是因为 `MoveTo` 按物理像素定位（见 7.16 DPI 坑），尺寸用 DIP 是因为 `SetSize` 按窗口 DPI 放大；保存几何用 Win32 `GetWindowRect` + 显示器 DPI 折算，不依赖 Photino 的 `Left/Top` 属性单位。**约束**：最大化/最小化/全屏状态不落盘；复用已打开的内容窗口时不要再 `DockContentToMain`（否则用户拖好的位置每次打开工具都会被重置）；所有 `Persist*` 必须「Load → with 更新 → Save」，不要整份覆盖配置。
+
 ---
 
 ## 8. 平台事实（不要假装全平台都是 WebKit）
@@ -245,6 +259,8 @@ badge / 使用次数拆成表格列——条目结构保持「图标 / `.nav-lab
 | Linux | WebKitGTK 4.1 | ✅ | ⚠️ 需系统 `libwebkit2gtk-4.1`，**未真机验证** |
 
 密钥存储同理：Windows 用 DPAPI，macOS/Linux 走 AES-GCM 加密文件兜底（Keychain / libsecret 原生互操作**故意未实现**）。
+
+系统托盘同理：**仅 Windows 实现**（`Shell/TrayIcon.cs`，Shell_NotifyIcon + 独立消息线程）。Windows 下关闭主窗口默认收起到托盘，托盘「退出 QTools」才真正结束进程；macOS/Linux 无托盘，关闭即退出。
 
 **回答"支持哪些平台"时必须带上验证状态**，不要把"代码写了"说成"验证过了"。
 
@@ -274,8 +290,8 @@ badge / 使用次数拆成表格列——条目结构保持「图标 / `.nav-lab
 5. **PowerShell 里 `"$(id)"` 会被当子表达式求值**。生成含 `$(...)` 的代码时用编辑工具写文件，别用字符串拼接。
 
 **测试分层**：
-- `dotnet test`：纯单元 + 内存级集成（真实 `BridgeDispatcher.DispatchAsync` + 临时目录）。当前 378 个（含内嵌凭证、索引程序隐藏、拼音首字母/全拼检索、备份/Git、流式取消链路、索引原子覆盖、内容窗口初始定位、在线工具、原位菜单定位、小工具/在线工具重命名）。
-- `node --test tests/*.cjs`：前端行为级测试（vm 沙箱 + DOM shim，跑 `app.js`/`bridge.js`/示例工具页面）。当前 126 个。注意：vm 沙箱里创建的对象带另一套原型，断言前先用 `JSON.parse(JSON.stringify(...))` 归一化。
+- `dotnet test`：纯单元 + 内存级集成（真实 `BridgeDispatcher.DispatchAsync` + 临时目录）。当前 412 个（含内嵌凭证、索引程序隐藏、拼音首字母/全拼检索、备份/Git、流式取消链路、索引原子覆盖、内容窗口初始定位、在线工具、原位菜单定位、小工具/在线工具重命名、统一属性字段、托盘菜单规划与弹层定位、主窗口尺寸记忆、内容窗口位置/尺寸记忆）。
+- `node --test tests/*.cjs`：前端行为级测试（vm 沙箱 + DOM shim，跑 `app.js`/`bridge.js`/示例工具页面）。当前 129 个。注意：vm 沙箱里创建的对象带另一套原型，断言前先用 `JSON.parse(JSON.stringify(...))` 归一化。
 - `--self-test`：真起 Kestrel，27 项 HTTP 断言（host 头校验、路径穿越、工具资源、设置页、品牌图标；其中工具资源每工具 3 项，数量随已装工具数浮动）。
 - ad-hoc 验收脚本：**不入库**，历史脚本在 `%TEMP%`。GUI 真机验证可用 WebView2 远程调试：启动时设 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=<port> --remote-debugging-address=127.0.0.1`，再用 CDP（`/json/list` + WebSocket）注入 JS / 截图；日志断言（`-> ok`、`已打开...窗口`）仍是最轻量的手段。
 
@@ -284,7 +300,7 @@ badge / 使用次数拆成表格列——条目结构保持「图标 / `.nav-lab
 ## 11. 提交前检查清单
 
 - [ ] `dotnet build` → 0 error / 0 warning
-- [ ] `dotnet test` → 全绿（当前基线 **378**）
+- [ ] `dotnet test` → 全绿（当前基线 **412**）
 - [ ] `node --test tests/app.test.cjs` → 全绿（改过 `app.js` 时必须跑）
 - [ ] `--self-test` → **27 PASS / 0 FAIL**，退出码 0
 - [ ] `dotnet publish -c Release` → **0 AOT warning**

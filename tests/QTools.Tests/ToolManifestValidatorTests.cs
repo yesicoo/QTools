@@ -56,6 +56,18 @@ public sealed class ToolManifestValidatorTests
     }
 
     [Fact]
+    public void CategoryAndGlyphLengthsAreValidated()
+    {
+        var ok = CreateManifest() with { Category = "效率", Glyph = "🧮" };
+        Assert.Empty(ToolManifestValidator.Validate(ok, "demo-tool"));
+
+        var bad = CreateManifest() with { Category = new string('类', 31), Glyph = "12345" };
+        var errors = ToolManifestValidator.Validate(bad, "demo-tool");
+        Assert.Contains(errors, e => e.Contains("category"));
+        Assert.Contains(errors, e => e.Contains("glyph"));
+    }
+
+    [Fact]
     public void IdMustMatchDirectoryName()
     {
         var errors = ToolManifestValidator.Validate(CreateManifest(id: "other-id"), "demo-tool");

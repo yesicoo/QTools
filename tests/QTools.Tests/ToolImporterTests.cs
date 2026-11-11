@@ -1,3 +1,4 @@
+using System.Text.Json;
 using QTools.Host.Bridge;
 using QTools.Host.Creator;
 using QTools.Host.Tools;
@@ -34,7 +35,7 @@ public sealed class ToolImporterTests : IDisposable
     [Fact]
     public async Task ImportsPlainHtmlAndWritesManifest()
     {
-        var result = await _importer.ImportAsync("我的计算器", PlainHtml, null, acceptHighSeverity: false, default);
+        var result = await _importer.ImportAsync("我的计算器", PlainHtml, null, null, null, acceptHighSeverity: false, default);
 
         Assert.True(result.Saved);
         Assert.Equal("imported-", result.ToolId[..9]);   // 中文名退化为哈希后缀
@@ -53,17 +54,54 @@ public sealed class ToolImporterTests : IDisposable
     }
 
     [Fact]
+    public async Task ImportsUnifiedAttributesIntoManifest()
+    {
+        var result = await _importer.ImportAsync(
+            "我的计算器", PlainHtml, "  简单四则运算  ", "  效率  ", "  🧮  ",
+            acceptHighSeverity: false, default);
+
+        var loaded = _registry.Reload(result.ToolId)!;
+        Assert.Equal("简单四则运算", loaded.Manifest.Description);
+        Assert.Equal("效率", loaded.Manifest.Category);
+        Assert.Equal("🧮", loaded.Manifest.Glyph);
+
+        // 落盘反向读回：字段名与在线工具 web.json 保持同一套（description/category/glyph）
+        using var document = JsonDocument.Parse(
+            await File.ReadAllTextAsync(Path.Combine(_toolsDir, result.ToolId, "manifest.json")));
+        var root = document.RootElement;
+        Assert.Equal("简单四则运算", root.GetProperty("description").GetString());
+        Assert.Equal("效率", root.GetProperty("category").GetString());
+        Assert.Equal("🧮", root.GetProperty("glyph").GetString());
+    }
+
+    [Fact]
+    public async Task RejectsOverlongUnifiedAttributes()
+    {
+        var description = await Assert.ThrowsAsync<BridgeException>(
+            () => _importer.ImportAsync("X", PlainHtml, new string('描', 301), null, null, false, default));
+        Assert.Equal("IMPORT_DESCRIPTION_TOO_LONG", description.Code);
+
+        var category = await Assert.ThrowsAsync<BridgeException>(
+            () => _importer.ImportAsync("X", PlainHtml, null, new string('类', 31), null, false, default));
+        Assert.Equal("IMPORT_CATEGORY_TOO_LONG", category.Code);
+
+        var glyph = await Assert.ThrowsAsync<BridgeException>(
+            () => _importer.ImportAsync("X", PlainHtml, null, null, "12345", false, default));
+        Assert.Equal("IMPORT_GLYPH_TOO_LONG", glyph.Code);
+    }
+
+    [Fact]
     public async Task GeneratesAsciiSlugFromAsciiName()
     {
-        var result = await _importer.ImportAsync("My Cool Tool!", PlainHtml, null, false, default);
+        var result = await _importer.ImportAsync("My Cool Tool!", PlainHtml, null, null, null, false, default);
         Assert.Equal("my-cool-tool", result.ToolId);
     }
 
     [Fact]
     public async Task SameNonAsciiNameIsStable()
     {
-        var first = await _importer.ImportAsync("录音机", PlainHtml, null, false, default);
-        var second = await _importer.ImportAsync("录音机", PlainHtml, null, false, default);
+        var first = await _importer.ImportAsync("录音机", PlainHtml, null, null, null, false, default);
+        var second = await _importer.ImportAsync("录音机", PlainHtml, null, null, null, false, default);
 
         Assert.Equal(first.ToolId, second.ToolId[..first.ToolId.Length]);
         Assert.NotEqual(first.ToolId, second.ToolId);   // 第二个自动加 -2 后缀保证唯一
@@ -78,7 +116,7 @@ public sealed class ToolImporterTests : IDisposable
             + "navigator.mediaDevices.getUserMedia({audio:true});"
             + "</script></body></html>";
 
-        var result = await _importer.ImportAsync("Recorder", html, null, false, default);
+        var result = await _importer.ImportAsync("Recorder", html, null, null, null, false, default);
 
         Assert.True(result.Saved);
         Assert.Contains("storage", result.Permissions);
@@ -93,7 +131,7 @@ public sealed class ToolImporterTests : IDisposable
     public async Task DoesNotDeclareUnusedPermissions()
     {
         var html = "<html><body><script>window.host.storage.set('k',1);</script></body></html>";
-        var result = await _importer.ImportAsync("Notes", html, null, false, default);
+        var result = await _importer.ImportAsync("Notes", html, null, null, null, false, default);
 
         Assert.Equal(new[] { "storage" }, result.Permissions);
     }
@@ -106,7 +144,7 @@ public sealed class ToolImporterTests : IDisposable
         // 致命场景：manifest 结构非法。导入固定字段均合法，故改用超长名称走校验。
         var longName = new string('x', 61);
         await Assert.ThrowsAsync<QTools.Host.Bridge.BridgeException>(
-            () => _importer.ImportAsync(longName, PlainHtml, null, false, default));
+            () => _importer.ImportAsync(longName, PlainHtml, null, null, null, false, default));
     }
 
     [Fact]
@@ -114,13 +152,13 @@ public sealed class ToolImporterTests : IDisposable
     {
         var html = "<html><body><script>eval('1+1');</script></body></html>";
 
-        var first = await _importer.ImportAsync("EvalTool", html, null, false, default);
+        var first = await _importer.ImportAsync("EvalTool", html, null, null, null, false, default);
         Assert.False(first.Saved);
         Assert.True(first.RequiresExplicitAcceptance);
         Assert.Contains(first.Findings, f => f.Code == "DYNAMIC_CODE");
         Assert.False(Directory.Exists(Path.Combine(_toolsDir, first.ToolId)));
 
-        var second = await _importer.ImportAsync("EvalTool", html, null, true, default);
+        var second = await _importer.ImportAsync("EvalTool", html, null, null, null, true, default);
         Assert.True(second.Saved);
         Assert.True(Directory.Exists(Path.Combine(_toolsDir, second.ToolId)));
     }
@@ -129,9 +167,9 @@ public sealed class ToolImporterTests : IDisposable
     public async Task RejectsEmptyHtmlAndName()
     {
         await Assert.ThrowsAsync<QTools.Host.Bridge.BridgeException>(
-            () => _importer.ImportAsync("", PlainHtml, null, false, default));
+            () => _importer.ImportAsync("", PlainHtml, null, null, null, false, default));
         await Assert.ThrowsAsync<QTools.Host.Bridge.BridgeException>(
-            () => _importer.ImportAsync("Name", "   ", null, false, default));
+            () => _importer.ImportAsync("Name", "   ", null, null, null, false, default));
     }
 
     [Fact]
@@ -139,7 +177,7 @@ public sealed class ToolImporterTests : IDisposable
     {
         var huge = "<html><body>" + new string('a', ToolImporter.MaxHtmlBytes + 1024) + "</body></html>";
         var ex = await Assert.ThrowsAsync<QTools.Host.Bridge.BridgeException>(
-            () => _importer.ImportAsync("Huge", huge, null, false, default));
+            () => _importer.ImportAsync("Huge", huge, null, null, null, false, default));
         Assert.Equal("IMPORT_HTML_TOO_LARGE", ex.Code);
     }
 

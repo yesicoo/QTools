@@ -352,7 +352,8 @@
      *      / embedTool（签发内嵌凭证，返回带 ?bt= 的工具 URL 供 iframe 内嵌）
      *      / listBackups / createBackup / restoreBackup / deleteBackup / importBackupFile
      *      / openBackupDirectory / getBackupConfig / setBackupConfig / gitPush / gitRestore
-     *      / setHotkeyEnabled / cancelRequest
+     *      / setHotkeyEnabled / setTrayMenuItems / cancelRequest
+     *      / trayMenuList / trayMenuReady / hideTrayMenu / exitApp（托盘弹层：前五项 / 就绪 / 收起 / 退出）
      */
     callManager: function (method, payload) {
       var long = ["manager.generateTool", "manager.generateUpdate", "manager.fixTool",

@@ -300,7 +300,10 @@ internal static class ImportMethods
             ?? throw new BridgeException("BRIDGE_BAD_REQUEST", "payload 解析失败");
 
         var result = await context.Importer
-            .ImportAsync(payload.Name, payload.Html, payload.Description, payload.AcceptHighSeverity, CancellationToken.None)
+            .ImportAsync(
+                payload.Name, payload.Html, payload.Description,
+                payload.Category, payload.Glyph,
+                payload.AcceptHighSeverity, CancellationToken.None)
             .ConfigureAwait(false);
 
         return JsonSerializer.SerializeToElement(
@@ -498,7 +501,9 @@ internal static class LauncherMethods
             ?? throw new BridgeException("BRIDGE_BAD_REQUEST", "payload 解析失败");
 
         await context.WebToolStore
-            .AddAsync(payload.Name, payload.Url, payload.Category, payload.Glyph, CancellationToken.None)
+            .AddAsync(
+                payload.Name, payload.Url, payload.Category, payload.Glyph,
+                CancellationToken.None, payload.Description)
             .ConfigureAwait(false);
 
         return JsonSerializer.SerializeToElement(
@@ -1001,6 +1006,30 @@ internal static class ShellMethods
             JsonSerializer.SerializeToElement(BackupMethods.BuildConfigView(context), AppJsonContext.Default.BackupConfigView));
     }
 
+    /// <summary>设置托盘快捷菜单显示数量（1–20，默认 10）。</summary>
+    public static System.Threading.Tasks.Task<JsonElement> SetTrayMenuItemsAsync(BridgeContext context)
+    {
+        var payload = PayloadReader.RequireObject(context.Payload);
+        if (!payload.TryGetProperty("count", out var countElement) ||
+            countElement.ValueKind != JsonValueKind.Number ||
+            !countElement.TryGetInt32(out var count) ||
+            count is < 1 or > Shell.TrayMenuPlanner.MaxItems)
+        {
+            throw new BridgeException(
+                "BRIDGE_BAD_REQUEST",
+                $"payload.count 必填，且为 1~{Shell.TrayMenuPlanner.MaxItems} 的整数");
+        }
+
+        var config = QTools.Host.Ai.ConfigStore.Load(QTools.Host.Configuration.AppPaths.ConfigFilePath);
+        var shellSection = config.Shell ?? new Configuration.ShellConfigSection();
+        QTools.Host.Ai.ConfigStore.Save(
+            QTools.Host.Configuration.AppPaths.ConfigFilePath,
+            config with { Shell = shellSection with { TrayMenuItems = count } });
+
+        return System.Threading.Tasks.Task.FromResult(
+            JsonSerializer.SerializeToElement(BackupMethods.BuildConfigView(context), AppJsonContext.Default.BackupConfigView));
+    }
+
     /// <summary>打开内容窗口（工具/AI创建/导入/在线工具）：独立窗口贴主窗口边缘，自动吸附。</summary>
     public static async System.Threading.Tasks.Task<JsonElement> OpenContentAsync(BridgeContext context)
     {
@@ -1029,6 +1058,56 @@ internal static class ShellMethods
 
         await context.Shell.OpenContentAsync(view, toolId).ConfigureAwait(false);
         return JsonSerializer.SerializeToElement(new OkResult(true), AppJsonContext.Default.OkResult);
+    }
+
+    /// <summary>托盘菜单条目：统一列表前五项（HTML 弹层渲染用，仅宿主管理界面）。</summary>
+    public static System.Threading.Tasks.Task<JsonElement> TrayMenuListAsync(BridgeContext context)
+    {
+        if (context.Shell is null)
+        {
+            throw new BridgeException("INTERNAL_ERROR", "宿主壳未就绪");
+        }
+
+        var entries = context.Shell.GetTrayEntries();
+        return System.Threading.Tasks.Task.FromResult(JsonSerializer.SerializeToElement(
+            new Shell.TrayMenuListView(entries), AppJsonContext.Default.TrayMenuListView));
+    }
+
+    /// <summary>托盘弹层渲染完成：宿主把离屏窗口移到光标处显示（复用窗口不再触发 InitialContentLoaded）。</summary>
+    public static async System.Threading.Tasks.Task<JsonElement> TrayMenuReadyAsync(BridgeContext context)
+    {
+        if (context.Shell is null)
+        {
+            throw new BridgeException("INTERNAL_ERROR", "宿主壳未就绪");
+        }
+
+        await context.Shell.NotifyTrayMenuReadyAsync().ConfigureAwait(false);
+        return JsonSerializer.SerializeToElement(new OkResult(true), AppJsonContext.Default.OkResult);
+    }
+
+    /// <summary>收起托盘菜单弹层（Esc / 点击条目后调用）。</summary>
+    public static async System.Threading.Tasks.Task<JsonElement> HideTrayMenuAsync(BridgeContext context)
+    {
+        if (context.Shell is null)
+        {
+            throw new BridgeException("INTERNAL_ERROR", "宿主壳未就绪");
+        }
+
+        await context.Shell.HideTrayMenuAsync().ConfigureAwait(false);
+        return JsonSerializer.SerializeToElement(new OkResult(true), AppJsonContext.Default.OkResult);
+    }
+
+    /// <summary>退出 QTools（托盘菜单「退出」，真正结束进程）。</summary>
+    public static System.Threading.Tasks.Task<JsonElement> ExitAppAsync(BridgeContext context)
+    {
+        if (context.Shell is null)
+        {
+            throw new BridgeException("INTERNAL_ERROR", "宿主壳未就绪");
+        }
+
+        context.Shell.RequestExit();
+        return System.Threading.Tasks.Task.FromResult(JsonSerializer.SerializeToElement(
+            new OkResult(true), AppJsonContext.Default.OkResult));
     }
 
     /// <summary>关闭内容窗口（内容页「收起」按钮）。</summary>
@@ -1079,7 +1158,8 @@ internal static class BackupMethods
             backup.LastPushStatus,
             shell.HotkeyEnabled,
             context.Shell?.HotkeySupported ?? false,
-            context.Shell?.HotkeyRegistered ?? false);
+            context.Shell?.HotkeyRegistered ?? false,
+            Shell.TrayMenuPlanner.ResolveCount(shell.TrayMenuItems));
     }
 
     public static System.Threading.Tasks.Task<JsonElement> ListBackupsAsync(BridgeContext context)

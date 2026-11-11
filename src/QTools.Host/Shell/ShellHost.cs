@@ -34,6 +34,39 @@ public sealed class ShellHost
     /// <summary>主窗口是否被热键隐藏（区别于用户最小化）。</summary>
     private bool _hiddenByHotkey;
 
+    /// <summary>系统托盘图标（仅 Windows；创建失败时为 null，关闭主窗口直接退出）。</summary>
+    private TrayIcon? _tray;
+
+    /// <summary>托盘菜单 HTML 弹层窗口（无边框、失焦自动收起）。</summary>
+    private PhotinoWindow? _trayMenuWindow;
+
+    private bool _trayMenuPendingShow;
+    private long _trayMenuRequestSerial;
+    private long _trayMenuShownAt;
+    private int _trayMenuLeft;
+    private int _trayMenuTop;
+    private int _trayMenuHeight;
+
+    private const int TrayMenuWidth = 288;
+
+    /// <summary>刚显示的弹层可能因前台锁拿不到焦点而立刻触发失焦，这段宽限期内忽略收起。</summary>
+    private const int TrayMenuDeactivateGraceMs = 800;
+
+    /// <summary>页面就绪回传迟迟不来时的兜底显示时限（防止页面脚本出错导致菜单永远不出现）。</summary>
+    private const int TrayMenuReadyFallbackMs = 1200;
+
+    /// <summary>是否已经由「退出 QTools」放行主窗口关闭。</summary>
+    private bool _exitRequested;
+
+    /// <summary>托盘菜单条目提供者（组合根注入统一列表前五项，每次打开实时读取）。</summary>
+    public Func<IReadOnlyList<TrayEntry>>? TrayEntriesProvider { get; set; }
+
+    /// <summary>主窗口尺寸保存防抖序号（连续拖动时只在停下约 500ms 后落一次盘）。</summary>
+    private long _mainWindowSizeSaveSerial;
+
+    /// <summary>内容窗口位置/尺寸保存防抖序号。</summary>
+    private long _contentWindowSaveSerial;
+
     private int _port;
     private ServerInfoView _serverInfo = null!;
     private bool _devMode;
@@ -72,8 +105,8 @@ public sealed class ShellHost
     /// <summary>登记启动后立即打开设置窗口（供 --open-settings 与自动化验收使用）。</summary>
     public void QueueSettingsToOpen() => _pendingSettingsToOpen = true;
 
-    /// <summary>启动消息循环（阻塞直至主窗口关闭）。</summary>
-    public int Run(int port, bool devMode)
+    /// <summary>启动消息循环（阻塞直至主窗口关闭）。enableTray 仅正常桌面模式启用；无头预览保持关闭即退出。</summary>
+    public int Run(int port, bool devMode, bool enableTray = true)
     {
         _port = port;
         _devMode = devMode;
@@ -113,6 +146,10 @@ public sealed class ShellHost
         {
             var mainWindow = CreateHostWindow();
             _mainWindow = mainWindow;
+            if (enableTray)
+            {
+                StartTray();
+            }
             _application
                 .SetName("QTools")
                 .SetShutdownMode(PhotinoShutdownMode.OnMainWindowClose)
@@ -122,7 +159,11 @@ public sealed class ShellHost
                     LogRuntimeInfo();
                     DrainPendingTools();
                 })
-                .RegisterExitHandler((_, e) => Log.Info($"应用退出，退出码 {e.ApplicationExitCode}"));
+                .RegisterExitHandler((_, e) =>
+                {
+                    DisposeTray();
+                    Log.Info($"应用退出，退出码 {e.ApplicationExitCode}");
+                });
 
             Log.Info($"创建 PhotinoX 主窗口（{PlatformInfo.WebViewName}）→ {HostUiUrl}");
 
@@ -130,6 +171,7 @@ public sealed class ShellHost
         }
         finally
         {
+            DisposeTray();
             StopHotkey();
             QTools.Host.Configuration.AppPaths.CleanupWebViewDataDirectory();
         }
@@ -203,6 +245,25 @@ public sealed class ShellHost
 
     private async System.Threading.Tasks.Task ToggleMainWindowAsync()
     {
+        var shouldShow = await InvokeOnUiThreadAsync(() =>
+        {
+            var window = _mainWindow;
+            return window is null || window.IsClosed || _hiddenByHotkey || !window.IsVisible;
+        }).ConfigureAwait(false);
+
+        if (shouldShow)
+        {
+            await ShowMainWindowAsync().ConfigureAwait(false);
+        }
+        else
+        {
+            await HideMainWindowAsync().ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>显示主窗口（热键呼出 / 托盘左键）。</summary>
+    private async System.Threading.Tasks.Task ShowMainWindowAsync()
+    {
         await InvokeOnUiThreadAsync(() =>
         {
             var window = _mainWindow;
@@ -211,30 +272,339 @@ public sealed class ShellHost
                 return System.Threading.Tasks.Task.CompletedTask;
             }
 
-            if (_hiddenByHotkey || !window.IsVisible)
+            HideTrayMenuNow();
+            _hiddenByHotkey = false;
+            window.Show();
+            if (window.WindowState == PhotinoWindowState.Minimized)
             {
-                _hiddenByHotkey = false;
-                window.Show();
-                if (window.WindowState == PhotinoWindowState.Minimized)
-                {
-                    window.Restore();
-                }
+                window.Restore();
+            }
 
-                window.Activate();
-                window.BringToFront();
-                ShowContentAfterMainShow();
-                Log.Info("热键：主窗口已呼出");
+            window.Activate();
+            window.BringToFront();
+            ShowContentAfterMainShow();
+            Log.Info("主窗口已显示");
+            return System.Threading.Tasks.Task.CompletedTask;
+        }).ConfigureAwait(false);
+    }
+
+    /// <summary>隐藏主窗口（热键收起 / 关闭到托盘），内容窗口随之隐藏。</summary>
+    private async System.Threading.Tasks.Task HideMainWindowAsync()
+    {
+        await InvokeOnUiThreadAsync(() =>
+        {
+            var window = _mainWindow;
+            if (window is null || window.IsClosed)
+            {
+                return System.Threading.Tasks.Task.CompletedTask;
+            }
+
+            window.Hide();
+            _hiddenByHotkey = true;
+            HideContentForMainHide();
+            Log.Info("主窗口已隐藏");
+            return System.Threading.Tasks.Task.CompletedTask;
+        }).ConfigureAwait(false);
+    }
+
+    /* ================= 系统托盘（仅 Windows） ================= */
+
+    private void StartTray()
+    {
+        if (!TrayIcon.IsSupported)
+        {
+            Log.Info("当前平台无系统托盘实现，关闭主窗口将直接退出");
+            return;
+        }
+
+        var tray = TrayIcon.TryCreate(
+            "QTools — 左键显示主窗口，右键打开工具",
+            ShowMainWindowFromTray,
+            ShowTrayMenuFromTray);
+        if (tray is null)
+        {
+            Log.Warn("系统托盘不可用，关闭主窗口将直接退出");
+            return;
+        }
+
+        _tray = tray;
+        Log.Info("系统托盘图标已创建（关闭主窗口将收起到托盘）");
+    }
+
+    private void ShowMainWindowFromTray()
+    {
+        _ = System.Threading.Tasks.Task.Run(async () =>
+        {
+            try
+            {
+                await ShowMainWindowAsync().ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"托盘显示主窗口失败：{ex.Message}");
+            }
+        });
+    }
+
+    /// <summary>托盘右键：在光标处显示 HTML 弹层菜单（样式与主界面一致，失焦自动收起）。</summary>
+    private void ShowTrayMenuFromTray()
+    {
+        _ = System.Threading.Tasks.Task.Run(async () =>
+        {
+            try
+            {
+                await ShowTrayMenuAsync().ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"托盘菜单显示失败：{ex.Message}");
+            }
+        });
+    }
+
+    private async System.Threading.Tasks.Task ShowTrayMenuAsync()
+    {
+        await InvokeOnUiThreadAsync(() =>
+        {
+            var count = GetTrayEntries().Count;
+
+            // 光标/工作区必须在 Photino 窗口所在 UI 线程读取（物理像素）；托盘消息线程是
+            // 96-DPI 上下文，在缩放屏上取到的是逻辑坐标，会让弹层错位。
+            var cursor = NativeWindowInfo.GetCursorPosition() ?? (0, 0);
+            var workArea = NativeWindowInfo.GetWorkAreaAtPoint(cursor.X, cursor.Y)
+                ?? new WindowRect(0, 0, 1920, 1080);
+
+            // 条目多时高度不能超出工作区，否则底部「退出」会被任务栏挡住；超出部分由列表滚动
+            var scale = NativeWindowInfo.GetDpiAtPoint(cursor.X, cursor.Y) / 96.0;
+            var maxHeight = (int)Math.Floor(workArea.Height / scale) - 24;
+            var height = Math.Min(TrayMenuHeight(count), Math.Max(240, maxHeight));
+
+            // 弹层尺寸是 DIP（SetSize 按窗口 DPI 放大），定位是物理像素（MoveTo 原样使用），
+            // 夹回工作区时要用缩放后的实际像素尺寸。
+            var pixelWidth = (int)Math.Round(TrayMenuWidth * scale);
+            var pixelHeight = (int)Math.Round(height * scale);
+            var (left, top) = TrayMenuPlacement.Compute(cursor.X, cursor.Y, pixelWidth, pixelHeight, workArea);
+
+            Log.Debug($"托盘菜单定位：光标=({cursor.X},{cursor.Y}) " +
+                $"工作区=({workArea.Left},{workArea.Top},{workArea.Width}x{workArea.Height}) " +
+                $"缩放={scale:0.##} 像素尺寸={pixelWidth}x{pixelHeight} 位置=({left},{top})");
+
+            _trayMenuLeft = left;
+            _trayMenuTop = top;
+            _trayMenuHeight = height;
+            _trayMenuPendingShow = true;
+            var serial = ++_trayMenuRequestSerial;
+
+            var url = $"{TrayMenuUrl}?t={Environment.TickCount64}";
+            var menu = _trayMenuWindow;
+            if (menu is null || menu.IsClosed)
+            {
+                menu = new PhotinoWindow()
+                    .SetTitle("QTools 托盘菜单")
+                    .SetUseOsDefaultSize(false)
+                    .SetUseOsDefaultLocation(false)
+                    .SetChromeless(true)
+                    .SetResizable(false)
+                    .SetTopmost(true)
+                    .SetSize(TrayMenuWidth, height)
+                    .SetContextMenuEnabled(_devMode)
+                    .SetDevToolsEnabled(_devMode)
+                    .SetUserDataFolder(QTools.Host.Configuration.AppPaths.WebViewUserDataDirectory)
+                    // InitialContentLoaded 只在窗口首次导航时触发一次；复用窗口靠页面回传
+                    // manager.trayMenuReady 显示（见 NotifyTrayMenuReadyAsync）。
+                    .RegisterInitialContentLoadedHandler((_, _) => ShowTrayMenuWindowIfPending())
+                    .RegisterDeactivatedHandler((_, _) =>
+                    {
+                        // 先用离屏 Show 初始化 WebView、刚显示时拿不到前台都会触发失焦，
+                        // 这些不算用户点击外部，宽限期后真正的失焦才收起。
+                        if (_trayMenuPendingShow
+                            || Environment.TickCount64 - _trayMenuShownAt < TrayMenuDeactivateGraceMs)
+                        {
+                            return;
+                        }
+
+                        HideTrayMenuNow();
+                    })
+                    .RegisterClosedHandler((_, _) =>
+                    {
+                        _trayMenuWindow = null;
+                        Log.Info("托盘菜单窗口已关闭");
+                    })
+                    .Load(url);
+
+                _trayMenuWindow = menu;
+                AttachBridge(menu, BridgeDispatcher.HostToolId);
+
+                // PhotinoX 运行期新建的窗口必须先 Show 才会初始化 WebView；
+                // 先放到屏幕外，等页面就绪再移动到光标处，避免白底闪一下。
+                menu.MoveTo(workArea.Left - pixelWidth - 200, workArea.Top, allowOutsideWorkArea: true);
+                menu.Show();
+                NativeWindowInfo.MarkAsToolWindow(menu.WindowHandle);
             }
             else
             {
-                window.Hide();
-                _hiddenByHotkey = true;
-                HideContentForMainHide();
-                Log.Info("热键：主窗口已隐藏");
+                menu.Hide();
+                menu.SetSize(TrayMenuWidth, height);
+                menu.Load(url);
             }
 
+            ScheduleTrayMenuFallbackShow(serial);
             return System.Threading.Tasks.Task.CompletedTask;
         }).ConfigureAwait(false);
+    }
+
+    private static int TrayMenuHeight(int count) => 90 + 42 * Math.Max(count, 1);
+
+    private void ShowTrayMenuWindowIfPending()
+    {
+        if (!_trayMenuPendingShow)
+        {
+            return;
+        }
+
+        _trayMenuPendingShow = false;
+        var menu = _trayMenuWindow;
+        if (menu is null || menu.IsClosed)
+        {
+            return;
+        }
+
+        NativeWindowInfo.MarkAsToolWindow(menu.WindowHandle);
+        menu.MoveTo(_trayMenuLeft, _trayMenuTop, allowOutsideWorkArea: true);
+        menu.SetSize(TrayMenuWidth, _trayMenuHeight);
+        menu.Show();
+        NativeWindowInfo.TryForceForeground(menu.WindowHandle);
+        menu.Activate();
+        menu.BringToFront();
+        NativeWindowInfo.ApplyRoundedCorners(menu.WindowHandle, 12);
+        _trayMenuShownAt = Environment.TickCount64;
+        Log.Info("托盘菜单已显示");
+    }
+
+    /// <summary>页面渲染完成回传（manager.trayMenuReady）：此时才把离屏窗口移到光标处显示。</summary>
+    public async System.Threading.Tasks.Task NotifyTrayMenuReadyAsync()
+    {
+        await InvokeOnUiThreadAsync(() =>
+        {
+            ShowTrayMenuWindowIfPending();
+            return System.Threading.Tasks.Task.CompletedTask;
+        }).ConfigureAwait(false);
+    }
+
+    private void ScheduleTrayMenuFallbackShow(long serial)
+    {
+        _ = System.Threading.Tasks.Task.Run(async () =>
+        {
+            try
+            {
+                await System.Threading.Tasks.Task.Delay(TrayMenuReadyFallbackMs).ConfigureAwait(false);
+                await InvokeOnUiThreadAsync(() =>
+                {
+                    if (_trayMenuPendingShow && _trayMenuRequestSerial == serial)
+                    {
+                        Log.Warn("托盘菜单页面就绪回传超时，已兜底显示");
+                        ShowTrayMenuWindowIfPending();
+                    }
+
+                    return System.Threading.Tasks.Task.CompletedTask;
+                }).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Log.Debug($"托盘菜单兜底显示失败：{ex.Message}");
+            }
+        });
+    }
+
+    private void HideTrayMenuNow()
+    {
+        _trayMenuPendingShow = false;
+        if (_trayMenuWindow is { IsClosed: false, IsVisible: true } menu)
+        {
+            menu.Hide();
+        }
+    }
+
+    /// <summary>桥接（manager.hideTrayMenu）：Esc / 点击条目后收起弹层。</summary>
+    public async System.Threading.Tasks.Task HideTrayMenuAsync()
+    {
+        await InvokeOnUiThreadAsync(() =>
+        {
+            HideTrayMenuNow();
+            return System.Threading.Tasks.Task.CompletedTask;
+        }).ConfigureAwait(false);
+    }
+
+    /// <summary>桥接（manager.trayMenuList）：实时读取前五项。</summary>
+    public IReadOnlyList<TrayEntry> GetTrayEntries()
+    {
+        var provider = TrayEntriesProvider;
+        if (provider is null)
+        {
+            return Array.Empty<TrayEntry>();
+        }
+
+        try
+        {
+            return provider().Take(TrayMenuPlanner.MaxItems).ToArray();
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"读取托盘菜单失败：{ex.Message}");
+            return Array.Empty<TrayEntry>();
+        }
+    }
+
+    /// <summary>托盘菜单「退出 QTools」/ 桥接 manager.exitApp：真正结束进程。</summary>
+    public void RequestExit()
+    {
+        _exitRequested = true;
+        Log.Info("托盘：退出 QTools");
+        _ = System.Threading.Tasks.Task.Run(async () =>
+        {
+            try
+            {
+                await InvokeOnUiThreadAsync(() =>
+                {
+                    if (_mainWindow is { IsClosed: false } main)
+                    {
+                        main.Close();
+                    }
+                    else
+                    {
+                        _application.Shutdown(0, force: true);
+                    }
+
+                    return System.Threading.Tasks.Task.CompletedTask;
+                }).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"托盘退出失败：{ex.Message}");
+                _application.Shutdown(0, force: true);
+            }
+        });
+    }
+
+    private void DisposeTray()
+    {
+        try
+        {
+            HideTrayMenuNow();
+        }
+        catch (Exception ex)
+        {
+            Log.Debug($"关闭托盘菜单失败：{ex.Message}");
+        }
+
+        if (_tray is null)
+        {
+            return;
+        }
+
+        _tray.Dispose();
+        _tray = null;
+        Log.Info("系统托盘图标已移除");
     }
 
     /// <summary>应用启动后（UI 线程、消息循环已就绪）排空待打开的工具窗口队列。</summary>
@@ -254,6 +624,8 @@ public sealed class ShellHost
 
     private string HostUiUrl => $"http://127.0.0.1:{_port}/__host__/index.html";
 
+    private string TrayMenuUrl => $"http://127.0.0.1:{_port}/__host__/tray-menu.html";
+
     private string SettingsUrl => $"http://127.0.0.1:{_port}/__host__/settings.html";
 
     private string ToolUrl(LoadedTool tool) => $"http://127.0.0.1:{_port}{tool.EntryUrl}";
@@ -268,19 +640,124 @@ public sealed class ShellHost
         }
     }
 
+    /// <summary>启动时取上次手动调整的主窗口尺寸（DIP），并夹到当前显示器工作区内。</summary>
+    private static (int Width, int Height) ResolveMainWindowSize()
+    {
+        var config = QTools.Host.Ai.ConfigStore.Load(QTools.Host.Configuration.AppPaths.ConfigFilePath);
+        var (width, height) = MainWindowSize.Resolve(
+            config.Shell?.MainWindowWidth, config.Shell?.MainWindowHeight);
+
+        if (NativeWindowInfo.GetWorkAreaAtPoint(0, 0) is not { } work)
+        {
+            return (width, height);
+        }
+
+        var scale = NativeWindowInfo.GetDpiAtPoint(0, 0) / 96.0;
+        var maxWidth = Math.Max(MainWindowSize.MinWidth, (int)Math.Round(work.Width / scale));
+        var maxHeight = Math.Max(MainWindowSize.MinHeight, (int)Math.Round(work.Height / scale));
+        return (Math.Min(width, maxWidth), Math.Min(height, maxHeight));
+    }
+
+    private void OnMainWindowSizeChanged(int width, int height)
+    {
+        // 窗口尚未交给 Run、最大化/最小化/全屏都不是用户想记住的普通窗口尺寸
+        if (_mainWindow is null or { IsClosed: true } || _mainWindow.WindowState != PhotinoWindowState.Normal)
+        {
+            return;
+        }
+
+        if (!MainWindowSize.ShouldPersist(width, height))
+        {
+            return;
+        }
+
+        var serial = Interlocked.Increment(ref _mainWindowSizeSaveSerial);
+        _ = System.Threading.Tasks.Task.Run(async () =>
+        {
+            try
+            {
+                await System.Threading.Tasks.Task.Delay(500).ConfigureAwait(false);
+                if (Interlocked.Read(ref _mainWindowSizeSaveSerial) != serial)
+                {
+                    return;
+                }
+
+                PersistMainWindowSize(width, height);
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"保存主窗口尺寸失败：{ex.Message}");
+            }
+        });
+    }
+
+    private void SaveCurrentMainWindowSize()
+    {
+        if (_mainWindow is { IsClosed: false } window && window.WindowState == PhotinoWindowState.Normal)
+        {
+            PersistMainWindowSize(window.Width, window.Height);
+        }
+    }
+
+    private static void PersistMainWindowSize(int width, int height)
+    {
+        if (!MainWindowSize.ShouldPersist(width, height))
+        {
+            return;
+        }
+
+        var path = QTools.Host.Configuration.AppPaths.ConfigFilePath;
+        var config = QTools.Host.Ai.ConfigStore.Load(path);
+        var shell = config.Shell ?? new QTools.Host.Configuration.ShellConfigSection();
+        if (shell.MainWindowWidth == width && shell.MainWindowHeight == height)
+        {
+            return;
+        }
+
+        QTools.Host.Ai.ConfigStore.Save(
+            path, config with { Shell = shell with { MainWindowWidth = width, MainWindowHeight = height } });
+        Log.Debug($"主窗口尺寸已保存：{width}×{height}");
+    }
+
     private PhotinoWindow CreateHostWindow()
     {
+        var (width, height) = ResolveMainWindowSize();
         var window = new PhotinoWindow()
             .SetTitle("QTools")
             .SetUseOsDefaultSize(false)
-            .SetSize(340, 720)
-            .SetMinSize(280, 480)
+            .SetSize(width, height)
+            .SetMinSize(MainWindowSize.MinWidth, MainWindowSize.MinHeight)
             .SetResizable(true)
             .SetContextMenuEnabled(_devMode)
             .SetDevToolsEnabled(_devMode)
             .SetUserDataFolder(QTools.Host.Configuration.AppPaths.WebViewUserDataDirectory)
             .Center()
-            .RegisterClosingHandler((_, _) => Log.Info("主窗口请求关闭"))
+            .RegisterSizeChangedHandler((_, e) => OnMainWindowSizeChanged(e.Width, e.Height))
+            .RegisterClosingHandler((_, e) =>
+            {
+                SaveCurrentMainWindowSize();
+
+                // 托盘可用时，点关闭按钮只是收起主窗口；只有托盘「退出 QTools」才真正结束进程
+                if (_exitRequested || _tray is null)
+                {
+                    Log.Info("主窗口关闭 → 退出应用");
+                    return;
+                }
+
+                e.Cancel = true;
+                Log.Info("主窗口关闭 → 收起到系统托盘");
+                _ = System.Threading.Tasks.Task.Run(async () =>
+                {
+                    try
+                    {
+                        await HideMainWindowAsync().ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Warn($"收起到托盘失败：{ex.Message}");
+                    }
+                });
+            })
             .RegisterClosedHandler((_, _) => Log.Info("主窗口已关闭"))
             .RegisterInitialContentLoadedHandler((_, _) => Log.Info($"主窗口初始内容已加载：{HostUiUrl}"))
             .Load(HostUiUrl);
@@ -291,8 +768,8 @@ public sealed class ShellHost
     }
 
     /// <summary>
-    /// 打开（或复用）内容窗口：工具/AI创建/导入在独立窗口中展示，打开时定位到主窗口旁边。
-    /// 之后各窗口自由移动，互不联动。
+    /// 打开（或复用）内容窗口：工具/AI创建/导入在独立窗口中展示。首次打开贴主窗口右侧；
+    /// 之后记住用户手动调整的位置与尺寸，下次打开恢复（位置失效时回退贴主窗口）。
     /// </summary>
     public async System.Threading.Tasks.Task OpenContentAsync(string view, string? toolId)
     {
@@ -324,15 +801,19 @@ public sealed class ShellHost
             {
                 content.SetTitle(title);
                 content.Load(url);
-                DockContentToMain(content, main);
                 content.Show();
                 content.Activate();
-                Log.Info($"内容窗口复用 → {url}");
+                Log.Info($"内容窗口复用（保持上次位置与尺寸）→ {url}");
                 return System.Threading.Tasks.Task.CompletedTask;
             }
 
-            const int contentWidth = 920;
-            const int contentHeight = 680;
+            var config = QTools.Host.Ai.ConfigStore.Load(QTools.Host.Configuration.AppPaths.ConfigFilePath);
+            var shellConfig = config.Shell ?? new QTools.Host.Configuration.ShellConfigSection();
+            var (contentWidth, contentHeight) = ContentWindowBounds.ResolveSize(
+                shellConfig.ContentWindowWidth, shellConfig.ContentWindowHeight);
+            var savedOrigin = ResolveContentWindowOrigin(
+                shellConfig.ContentWindowLeft, shellConfig.ContentWindowTop, ref contentWidth, ref contentHeight);
+
             var mainRect = new WindowRect(main.Left, main.Top, main.Width, main.Height);
             var workArea = NativeWindowInfo.GetWorkArea(main.WindowHandle);
             var position = WindowDock.DockPosition(mainRect, contentWidth, contentHeight, workArea);
@@ -342,14 +823,18 @@ public sealed class ShellHost
                 .SetUseOsDefaultSize(false)
                 .SetUseOsDefaultLocation(false)
                 .SetSize(contentWidth, contentHeight)
-                .SetMinSize(560, 420)
-                .SetLeft(position.Left)
-                .SetTop(position.Top)
+                .SetMinSize(ContentWindowBounds.MinWidth, ContentWindowBounds.MinHeight)
                 .SetResizable(true)
                 .SetContextMenuEnabled(_devMode)
                 .SetDevToolsEnabled(_devMode)
                 .SetUserDataFolder(QTools.Host.Configuration.AppPaths.WebViewUserDataDirectory)
-                .RegisterClosingHandler((_, _) => Log.Info("内容窗口请求关闭"))
+                .RegisterLocationChangedHandler((_, _) => ScheduleContentWindowSave())
+                .RegisterSizeChangedHandler((_, _) => ScheduleContentWindowSave())
+                .RegisterClosingHandler((_, _) =>
+                {
+                    SaveContentWindowNow();
+                    Log.Info("内容窗口请求关闭");
+                })
                 .RegisterClosedHandler((_, _) =>
                 {
                     Log.Info("内容窗口已关闭");
@@ -357,14 +842,150 @@ public sealed class ShellHost
                 })
                 .Load(url);
 
+            if (savedOrigin is { } origin)
+            {
+                // 保存的位置是物理像素（与 MoveTo 一致），在首次 Show 前应用避免闪一下
+                window.MoveTo(origin.Left, origin.Top, allowOutsideWorkArea: true);
+                Log.Info($"已打开内容窗口（恢复上次位置 {origin.Left},{origin.Top}，" +
+                    $"{contentWidth}×{contentHeight}）→ {url}");
+            }
+            else
+            {
+                window.SetLeft(position.Left);
+                window.SetTop(position.Top);
+                Log.Info($"已打开内容窗口（贴主窗口 {position.Left},{position.Top}，" +
+                    $"{contentWidth}×{contentHeight}）→ {url}");
+            }
+
             _contentWindow = window;
             ApplyWindowIcon(window);
             AttachBridge(window, BridgeDispatcher.HostToolId);
             window.Show();
 
-            Log.Info($"已打开内容窗口（{position.Left},{position.Top}）→ {url}");
             return System.Threading.Tasks.Task.CompletedTask;
         }).ConfigureAwait(false);
+    }
+
+    /// <summary>取内容窗口上次的位置（物理像素）；位置已不在任何显示器上时返回 null 并回退贴主窗口。</summary>
+    private static (int Left, int Top)? ResolveContentWindowOrigin(
+        int? savedLeft, int? savedTop, ref int width, ref int height)
+    {
+        if (savedLeft is not int left || savedTop is not int top)
+        {
+            return null;
+        }
+
+        // 用窗口左上角内部一点探测所在显示器：整块屏幕被拔掉时无法命中
+        var probeX = left + 80;
+        var probeY = top + 40;
+        if (!NativeWindowInfo.IsPointOnAnyMonitor(probeX, probeY) ||
+            NativeWindowInfo.GetWorkAreaAtPoint(probeX, probeY) is not { } work)
+        {
+            Log.Info("内容窗口上次位置已不在任何显示器上，回退贴主窗口打开");
+            return null;
+        }
+
+        var scale = NativeWindowInfo.GetDpiAtPoint(probeX, probeY) / 96.0;
+        var maxWidth = Math.Max(ContentWindowBounds.MinWidth, (int)Math.Round(work.Width / scale));
+        var maxHeight = Math.Max(ContentWindowBounds.MinHeight, (int)Math.Round(work.Height / scale));
+        width = Math.Min(width, maxWidth);
+        height = Math.Min(height, maxHeight);
+        return (left, top);
+    }
+
+    private void ScheduleContentWindowSave()
+    {
+        var serial = Interlocked.Increment(ref _contentWindowSaveSerial);
+        _ = System.Threading.Tasks.Task.Run(async () =>
+        {
+            try
+            {
+                await System.Threading.Tasks.Task.Delay(500).ConfigureAwait(false);
+                if (Interlocked.Read(ref _contentWindowSaveSerial) != serial)
+                {
+                    return;
+                }
+
+                (int Left, int Top, int Width, int Height)? bounds = null;
+                await InvokeOnUiThreadAsync(() =>
+                {
+                    bounds = CaptureContentWindowBounds();
+                    return System.Threading.Tasks.Task.CompletedTask;
+                }).ConfigureAwait(false);
+
+                if (bounds is { } value)
+                {
+                    PersistContentWindowBounds(value);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"保存内容窗口位置失败：{ex.Message}");
+            }
+        });
+    }
+
+    private void SaveContentWindowNow()
+    {
+        if (CaptureContentWindowBounds() is { } bounds)
+        {
+            PersistContentWindowBounds(bounds);
+        }
+    }
+
+    /// <summary>在 UI 线程读取内容窗口的物理矩形（位置物理像素、尺寸换算为 DIP）。</summary>
+    private (int Left, int Top, int Width, int Height)? CaptureContentWindowBounds()
+    {
+        var window = _contentWindow;
+        if (window is null or { IsClosed: true } || window.WindowState != PhotinoWindowState.Normal)
+        {
+            return null;
+        }
+
+        if (!NativeWindowInfo.TryGetWindowRect(window.WindowHandle, out var rect))
+        {
+            return null;
+        }
+
+        var scale = NativeWindowInfo.GetDpiAtPoint(
+            rect.Left + rect.Width / 2, rect.Top + rect.Height / 2) / 96.0;
+        var width = (int)Math.Round(rect.Width / scale);
+        var height = (int)Math.Round(rect.Height / scale);
+        if (!ContentWindowBounds.ShouldPersist(width, height))
+        {
+            return null;
+        }
+
+        return (rect.Left, rect.Top, width, height);
+    }
+
+    private static void PersistContentWindowBounds((int Left, int Top, int Width, int Height) bounds)
+    {
+        var path = QTools.Host.Configuration.AppPaths.ConfigFilePath;
+        var config = QTools.Host.Ai.ConfigStore.Load(path);
+        var shell = config.Shell ?? new QTools.Host.Configuration.ShellConfigSection();
+        if (shell.ContentWindowLeft == bounds.Left &&
+            shell.ContentWindowTop == bounds.Top &&
+            shell.ContentWindowWidth == bounds.Width &&
+            shell.ContentWindowHeight == bounds.Height)
+        {
+            return;
+        }
+
+        QTools.Host.Ai.ConfigStore.Save(
+            path,
+            config with
+            {
+                Shell = shell with
+                {
+                    ContentWindowLeft = bounds.Left,
+                    ContentWindowTop = bounds.Top,
+                    ContentWindowWidth = bounds.Width,
+                    ContentWindowHeight = bounds.Height,
+                },
+            });
+        Log.Debug(
+            $"内容窗口位置/尺寸已保存：({bounds.Left},{bounds.Top}) {bounds.Width}×{bounds.Height}");
     }
 
     /// <summary>关闭内容窗口（前端「收起」按钮 / manager.closeContent）。</summary>
@@ -379,15 +1000,6 @@ public sealed class ShellHost
 
             return System.Threading.Tasks.Task.CompletedTask;
         }).ConfigureAwait(false);
-    }
-
-    /// <summary>内容窗口（重新）打开时定位到主窗口旁边；只做一次初始定位，之后互不联动。</summary>
-    private void DockContentToMain(PhotinoWindow content, PhotinoWindow main)
-    {
-        var mainRect = new WindowRect(main.Left, main.Top, main.Width, main.Height);
-        var workArea = NativeWindowInfo.GetWorkArea(main.WindowHandle);
-        var position = WindowDock.DockPosition(mainRect, content.Width, content.Height, workArea);
-        content.MoveTo(position.Left, position.Top, allowOutsideWorkArea: true);
     }
 
     /// <summary>索引完成等后台事件 → 通知主窗口刷新统一列表（线程池线程调用，内部 marshal 到 UI）。</summary>

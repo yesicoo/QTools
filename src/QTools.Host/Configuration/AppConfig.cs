@@ -49,5 +49,16 @@ public sealed record BackupConfigSection(
     string? LastPushUtc,
     string? LastPushStatus);
 
-/// <summary>壳配置：全局热键（Alt+Space 呼出/隐藏主窗口，仅 Windows）。</summary>
-public sealed record ShellConfigSection(bool HotkeyEnabled = true);
+/// <summary>
+/// 壳配置：全局热键（Alt+Space 呼出/隐藏主窗口，仅 Windows）、主窗口尺寸（DIP，null = 340×720）、
+/// 托盘快捷菜单数量（1–20，默认 10），以及内容窗口上次的位置（物理像素）与尺寸（DIP）。
+/// </summary>
+public sealed record ShellConfigSection(
+    bool HotkeyEnabled = true,
+    int? MainWindowWidth = null,
+    int? MainWindowHeight = null,
+    int TrayMenuItems = 10,
+    int? ContentWindowLeft = null,
+    int? ContentWindowTop = null,
+    int? ContentWindowWidth = null,
+    int? ContentWindowHeight = null);

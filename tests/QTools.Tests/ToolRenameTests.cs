@@ -153,6 +153,32 @@ public sealed class ToolRenameTests : IDisposable
     }
 
     [Fact]
+    public async Task RenamePreservesCategoryGlyphAndDescription()
+    {
+        var toolDir = Path.Combine(_toolsDir, "styled");
+        Directory.CreateDirectory(toolDir);
+        File.WriteAllText(Path.Combine(toolDir, "manifest.json"),
+            """{"id":"styled","name":"旧名","version":"1.0.0","description":"说明","entry":"index.html","permissions":[],"window":{"width":400,"height":400,"resizable":true},"createdAt":"2026-11-04T00:00:00+08:00","allowEval":false,"csp":null,"category":"效率","glyph":"🧮"}""");
+        File.WriteAllText(Path.Combine(toolDir, "index.html"), "<html><body>x</body></html>");
+        _registry.Rescan();
+
+        var response = await DispatchAsync("manager.renameTool",
+            new { toolId = "styled", name = "新名" }, BridgeDispatcher.HostToolId);
+        Assert.True(response.GetProperty("result").GetProperty("ok").GetBoolean(), response.GetRawText());
+
+        var tool = _registry.Find("styled")!;
+        Assert.Equal("新名", tool.Name);
+        Assert.Equal("说明", tool.Manifest.Description);
+        Assert.Equal("效率", tool.Manifest.Category);
+        Assert.Equal("🧮", tool.Manifest.Glyph);
+
+        using var persisted = JsonDocument.Parse(
+            await File.ReadAllTextAsync(Path.Combine(toolDir, "manifest.json")));
+        Assert.Equal("效率", persisted.RootElement.GetProperty("category").GetString());
+        Assert.Equal("🧮", persisted.RootElement.GetProperty("glyph").GetString());
+    }
+
+    [Fact]
     public void RegistryRenameRejectsTooLongName()
     {
         CreateTool("demo");

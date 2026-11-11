@@ -10,7 +10,8 @@ public sealed record WebToolEntry(
     string Url,
     string? Category,
     string? Glyph,
-    string CreatedAt);
+    string CreatedAt,
+    string? Description = null);
 
 /// <summary>已加载的在线工具 + 校验状态。</summary>
 public sealed class LoadedWebTool
@@ -28,12 +29,13 @@ public sealed class LoadedWebTool
     public string Name => string.IsNullOrWhiteSpace(Entry.Name) ? Entry.Id : Entry.Name;
 }
 
-/// <summary>manager.addWebTool 的载荷。</summary>
+/// <summary>manager.addWebTool 的载荷（字段与导入工具表单对齐：名称/描述/分类/自定义图标 + 网址）。</summary>
 public sealed record AddWebToolPayload(
     string Name,
     string Url,
     string? Category,
-    string? Glyph);
+    string? Glyph,
+    string? Description = null);
 
 /// <summary>在线工具静态校验规则（纯函数，便于单测）。</summary>
 public static partial class WebToolValidator
@@ -57,6 +59,11 @@ public static partial class WebToolValidator
         if (string.IsNullOrWhiteSpace(entry.Name) || entry.Name.Trim().Length > 60)
         {
             errors.Add("name 必填且不超过 60 字符");
+        }
+
+        if (entry.Description is { Length: > 300 })
+        {
+            errors.Add("description 不超过 300 字符");
         }
 
         if (string.IsNullOrWhiteSpace(entry.Url))

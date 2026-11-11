@@ -69,13 +69,14 @@ public sealed class WebToolStore
         return $"{candidate}-{Convert.ToHexString(hash)[..6].ToLowerInvariant()}";
     }
 
-    /// <summary>新增一个在线工具。</summary>
+    /// <summary>新增一个在线工具（字段与导入工具表单对齐：名称/描述/分类/自定义图标 + 网址）。</summary>
     public async System.Threading.Tasks.Task<LoadedWebTool> AddAsync(
         string name,
         string url,
         string? category,
         string? glyph,
-        System.Threading.CancellationToken cancellationToken)
+        System.Threading.CancellationToken cancellationToken,
+        string? description = null)
     {
         if (string.IsNullOrWhiteSpace(name))
         {
@@ -105,7 +106,8 @@ public sealed class WebToolStore
             url,
             string.IsNullOrWhiteSpace(category) ? null : category.Trim(),
             string.IsNullOrWhiteSpace(glyph) ? null : glyph.Trim(),
-            DateTimeOffset.Now.ToString("o"));
+            DateTimeOffset.Now.ToString("o"),
+            string.IsNullOrWhiteSpace(description) ? null : description.Trim());
 
         var errors = WebToolValidator.Validate(entry, entry.Id);
         if (errors.Count > 0)

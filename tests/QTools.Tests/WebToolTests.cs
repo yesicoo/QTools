@@ -124,10 +124,13 @@ public sealed class WebToolTests : IDisposable
     }
 
     [Fact]
-    public void ValidatorEnforcesCategoryAndGlyphLengths()
+    public void ValidatorEnforcesDescriptionCategoryAndGlyphLengths()
     {
-        var entry = new WebToolEntry("news", "资讯站", "https://example.com", new string('类', 31), "12345", "");
+        var entry = new WebToolEntry(
+            "news", "资讯站", "https://example.com",
+            new string('类', 31), "12345", "", new string('描', 301));
         var errors = Validate(entry);
+        Assert.Contains(errors, e => e.Contains("description"));
         Assert.Contains(errors, e => e.Contains("category"));
         Assert.Contains(errors, e => e.Contains("glyph"));
     }
@@ -137,7 +140,8 @@ public sealed class WebToolTests : IDisposable
     [Fact]
     public async Task AddAsyncWritesJsonAndReloadsRegistry()
     {
-        var loaded = await _store.AddAsync("GitHub", "https://github.com", null, null, CancellationToken.None);
+        var loaded = await _store.AddAsync(
+            "GitHub", "https://github.com", null, null, CancellationToken.None, "  全球最大代码托管平台  ");
 
         Assert.True(loaded.IsValid);
         Assert.Equal("github", loaded.Id);
@@ -149,6 +153,7 @@ public sealed class WebToolTests : IDisposable
         Assert.NotNull(roundtrip);
         Assert.Equal("https://github.com", roundtrip!.Url);
         Assert.Equal("GitHub", roundtrip.Name);
+        Assert.Equal("全球最大代码托管平台", roundtrip.Description);
         Assert.NotNull(_webTools.Find("github"));
     }
 
@@ -189,7 +194,8 @@ public sealed class WebToolTests : IDisposable
     [Fact]
     public async Task RenameChangesDisplayNameAndPreservesIdentity()
     {
-        var loaded = await _store.AddAsync("资讯站", "https://example.com/news", "资讯", "🌐", CancellationToken.None);
+        var loaded = await _store.AddAsync(
+            "资讯站", "https://example.com/news", "资讯", "🌐", CancellationToken.None, "每日行业要闻");
         var createdAt = loaded.Entry.CreatedAt;
 
         var renamed = _store.Rename(loaded.Id, "  新资讯站  ");
@@ -199,6 +205,7 @@ public sealed class WebToolTests : IDisposable
         Assert.Equal("https://example.com/news", renamed.Entry.Url);
         Assert.Equal("资讯", renamed.Entry.Category);
         Assert.Equal("🌐", renamed.Entry.Glyph);
+        Assert.Equal("每日行业要闻", renamed.Entry.Description);
         Assert.Equal(createdAt, renamed.Entry.CreatedAt);
 
         // 落盘持久化：新名写入、id/目录不变
@@ -267,7 +274,8 @@ public sealed class WebToolTests : IDisposable
         apps.Rescan();
         var usage = new UsageStore(Path.Combine(_root, "data", "usage.json"));
 
-        var webA = await _store.AddAsync("A站", "https://a.example.com", "资讯", null, CancellationToken.None);
+        var webA = await _store.AddAsync(
+            "A站", "https://a.example.com", "资讯", null, CancellationToken.None, "浏览器主页");
         var webB = await _store.AddAsync("B站", "https://b.example.com", null, null, CancellationToken.None);
         usage.Record(webB.Id);
         usage.Record(webB.Id);
@@ -284,6 +292,8 @@ public sealed class WebToolTests : IDisposable
         Assert.Contains("b.example.com", view.Items[0].SearchKey);
         Assert.Equal("https://b.example.com", view.Items[0].Target);
         Assert.Equal("资讯", view.Items[1].Category);
+        Assert.Equal("浏览器主页", view.Items[1].Description);
+        Assert.Contains("liulanqi", view.Items[1].SearchKey);
         Assert.Equal("web", view.Items[1].Kind);
     }
 
@@ -303,7 +313,7 @@ public sealed class WebToolTests : IDisposable
     public async Task AddWebToolViaBridgeThenListAndDelete()
     {
         var add = await DispatchAsync("manager.addWebTool",
-            new { name = "GitHub", url = "https://github.com", category = (string?)null, glyph = (string?)null },
+            new { name = "GitHub", url = "https://github.com", category = "开发", glyph = "🐙", description = "代码托管" },
             BridgeDispatcher.HostToolId);
         Assert.True(add.GetProperty("result").GetProperty("ok").GetBoolean());
         Assert.NotNull(_webTools.Find("github"));
@@ -313,6 +323,9 @@ public sealed class WebToolTests : IDisposable
         var item = items.Single(i => i.GetProperty("kind").GetString() == "web");
         Assert.Equal("GitHub", item.GetProperty("name").GetString());
         Assert.Equal("github", item.GetProperty("id").GetString());
+        Assert.Equal("开发", item.GetProperty("category").GetString());
+        Assert.Equal("🐙", item.GetProperty("glyph").GetString());
+        Assert.Equal("代码托管", item.GetProperty("description").GetString());
 
         var remove = await DispatchAsync("manager.deleteWebTool", new { webId = "github" }, BridgeDispatcher.HostToolId);
         Assert.True(remove.GetProperty("result").GetProperty("ok").GetBoolean());

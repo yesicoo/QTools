@@ -57,6 +57,8 @@ namespace QTools.Host.Serialization;
 [JsonSerializable(typeof(Launcher.LauncherItemView))]
 [JsonSerializable(typeof(Launcher.LauncherIndexStatus))]
 [JsonSerializable(typeof(Launcher.LauncherListView))]
+[JsonSerializable(typeof(Shell.TrayEntry))]
+[JsonSerializable(typeof(Shell.TrayMenuListView))]
 [JsonSerializable(typeof(FilesSaveResult))]
 [JsonSerializable(typeof(FilesListResult))]
 [JsonSerializable(typeof(FilesReadResult))]

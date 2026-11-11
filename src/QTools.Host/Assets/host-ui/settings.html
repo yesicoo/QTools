@@ -76,6 +76,20 @@
   </section>
 
   <section class="panel">
+    <h2>系统托盘（Windows）</h2>
+    <p class="hint">右键托盘图标弹出的快捷菜单显示统一列表的前 N 项（1–20，默认 10）；条目多时列表自动滚动。</p>
+    <div class="form">
+      <label>显示数量
+        <input id="tray-items" type="number" min="1" max="20" step="1" value="10">
+      </label>
+    </div>
+    <div class="row">
+      <button id="tray-items-save" class="btn primary" type="button">保存</button>
+      <span id="tray-items-status" class="badge none">…</span>
+    </div>
+  </section>
+
+  <section class="panel">
     <h2>本机程序索引</h2>
     <p class="hint">启动时在后台自动索引本机已安装的程序，完成后整体覆盖旧索引；索引期间旧列表仍然可用。</p>
     <div class="row">

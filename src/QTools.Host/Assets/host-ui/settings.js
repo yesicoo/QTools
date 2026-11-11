@@ -147,6 +147,36 @@
     });
   });
 
+  /* ================= 系统托盘 ================= */
+  function renderTrayMenu(c) {
+    var input = $("tray-items");
+    if (input) { input.value = c.trayMenuItems; }
+    var badge = $("tray-items-status");
+    if (badge) {
+      badge.textContent = "当前显示前 " + c.trayMenuItems + " 项";
+      badge.className = "badge";
+    }
+  }
+
+  on("tray-items-save", "click", function () {
+    if (!host) { return; }
+    var input = $("tray-items");
+    var count = Number(input.value);
+    if (!Number.isInteger(count) || count < 1 || count > 20) {
+      toast("显示数量必须是 1~20 的整数", true);
+      return;
+    }
+
+    var btn = this;
+    btn.disabled = true;
+    host.callManager("manager.setTrayMenuItems", { count: count }).then(function (c) {
+      renderTrayMenu(c);
+      toast("托盘右键菜单已显示前 " + count + " 项");
+    }, function (e) {
+      toast("保存失败：" + errText(e), true);
+    }).finally(function () { btn.disabled = false; });
+  });
+
   /* ================= 本机程序索引 ================= */
   var indexPollTimer = null;
 
@@ -358,6 +388,7 @@
       $("git-url").value = c.gitRemoteUrl || "";
       renderGitLastPush(c);
       renderHotkey(c);
+      renderTrayMenu(c);
     }, function (e) { toast("读取备份配置失败：" + errText(e), true); });
   }
 
