@@ -44,7 +44,7 @@ public sealed record AddAppPayload(
     string? Glyph);
 
 /// <summary>manager.listApps 的列表项。IconUrl 为真实程序图标（提取失败为 null，前端回退字母头像）；
-/// SearchKey 含拼音首字母，供前端快速匹配。</summary>
+/// SearchKey 含拼音首字母与全拼，供前端子串匹配。</summary>
 public sealed record AppListItemView(
     string Id,
     string Name,

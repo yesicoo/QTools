@@ -120,7 +120,7 @@ ul.nav-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; 
 .nav-badge { font-size: 10px; color: var(--faint); flex: none; }
 
 /* ---- 右键原位菜单：条目按钮 ↔ 菜单在同一个 li 里 hidden 互换 ---- */
-.nav-item[hidden], .nav-menu[hidden], .menu-actions[hidden], .menu-detail[hidden] { display: none; }
+.nav-item[hidden], .nav-menu[hidden], .menu-actions[hidden], .menu-detail[hidden], .menu-rename[hidden] { display: none; }
 .nav-menu {
   display: flex; flex-direction: column; gap: 2px;
   padding: 4px; border-radius: 10px;
@@ -149,6 +149,16 @@ ul.nav-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; 
 .menu-kv { display: grid; gap: 1px; padding: 2px 4px; }
 .menu-kv span { font-size: 10.5px; color: var(--muted); }
 .menu-kv b { font-size: 12px; font-weight: 500; word-break: break-all; }
+.menu-rename { display: grid; gap: 7px; padding: 5px 5px 7px; animation: navMenuIn .16s ease; }
+.menu-rename-title { font-size: 10.5px; color: var(--muted); padding: 0 2px; }
+.menu-rename-input {
+  width: 100%; min-width: 0; font: inherit; font-size: 12.5px; color: var(--text);
+  background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+  padding: 7px 9px; outline: none; transition: border-color .14s, box-shadow .14s;
+}
+.menu-rename-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.menu-rename-row { display: flex; gap: 6px; }
+.menu-rename-row .btn { flex: 1; justify-content: center; padding: 6px 8px; }
 .menu-restore { animation: navRestoreIn .18s ease; }
 @keyframes navRestoreIn {
   from { opacity: 0; transform: translateY(-3px); }
@@ -495,6 +505,32 @@ body.mode-main .content { display: none; }
 body.mode-content .sidebar { display: none; }
 body.mode-content .content { padding: 14px 16px 20px; }
 body.mode-content .tool-view { min-height: calc(100vh - 34px); }
+
+/* =============== 宽窗口：统一列表自动变网格 =============== */
+/* 主窗口默认是细长条（340px）单列列表；拉宽后按窗口宽度自动排成多列卡片
+   （每列最小 240px，2 列 / 3 列 / 4 列随宽度自适应）。卡片内仍是原来的
+   图标 + 名称/类型 + 详情，右键原位菜单不变。整体限宽 1180px 居中，超宽屏不散架。 */
+@media (min-width: 540px) {
+  body.mode-main .sidebar > * {
+    width: 100%; max-width: 1180px; margin-left: auto; margin-right: auto;
+  }
+  body.mode-main ul.nav-list {
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 7px;
+  }
+  body.mode-main .nav-item {
+    padding: 9px 10px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+  }
+  body.mode-main .nav-item:hover { border-color: var(--accent); }
+  body.mode-main .nav-item.active { border-color: var(--accent); }
+  /* 底部操作坞在宽窗口收成居中的一排紧凑按钮，不再横向拉满 */
+  body.mode-main .side-actions { display: flex; justify-content: center; gap: 8px; }
+  body.mode-main .side-actions .btn {
+    width: auto; flex: 0 0 auto; flex-direction: row; gap: 6px; padding: 7px 12px; font-size: 11.5px;
+  }
+}
 
 /* 底部操作坞：设置按钮独占一行 */
 

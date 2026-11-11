@@ -157,6 +157,7 @@ public sealed class BridgeDispatcher
         Register("manager.listTools", ManagerMethods.ListToolsAsync, null, hostOnly: true);
         Register("manager.openTool", ManagerMethods.OpenToolAsync, null, hostOnly: true);
         Register("manager.deleteTool", ManagerMethods.DeleteToolAsync, null, hostOnly: true);
+        Register("manager.renameTool", ManagerMethods.RenameToolAsync, null, hostOnly: true);
         Register("manager.getAiConfig", ManagerMethods.GetAiConfigAsync, null, hostOnly: true);
         Register("manager.setAiConfig", ManagerMethods.SetAiConfigAsync, null, hostOnly: true);
         Register("manager.openSettings", SettingsMethods.OpenSettingsAsync, null, hostOnly: true);
@@ -176,6 +177,7 @@ public sealed class BridgeDispatcher
         Register("manager.reindexPrograms", LauncherMethods.ReindexProgramsAsync, null, hostOnly: true);
         Register("manager.addWebTool", LauncherMethods.AddWebToolAsync, null, hostOnly: true);
         Register("manager.deleteWebTool", LauncherMethods.DeleteWebToolAsync, null, hostOnly: true);
+        Register("manager.renameWebTool", LauncherMethods.RenameWebToolAsync, null, hostOnly: true);
         Register("manager.openWebTool", LauncherMethods.OpenWebToolAsync, null, hostOnly: true);
         Register("manager.hideProgram", LauncherMethods.HideProgramAsync, null, hostOnly: true);
         Register("manager.unhideProgram", LauncherMethods.UnhideProgramAsync, null, hostOnly: true);

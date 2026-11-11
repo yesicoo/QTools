@@ -38,7 +38,7 @@
 # 构建（Debug，够日常开发）
 dotnet build
 
-# 单元测试（当前基线 354 个）
+# 单元测试（当前基线 378 个）
 dotnet test
 
 # 开发运行（会开 GUI 窗口）
@@ -77,12 +77,13 @@ src/QTools.Host/
 ├── Server/                 LocalServer / ToolStaticFileMiddleware / HtmlRewriter / HostAssetEndpoint / SelfTest
 ├── Shell/                  ShellHost（窗口生命周期）/ WindowRegistry（窗口→toolId 绑定）
 ├── Storage/ToolStorage.cs  按 toolId 隔离的 JSON 键值存储
+├── Text/                   PinyinInitials（静态汉字→拼音表：首字母 + 全拼检索）
 ├── Tools/                  ToolManifest+校验 / ToolScanner(注册表) / ToolVersionStore / ToolFiles / SampleTools
 └── Assets/
     ├── host-ui/            index.html + app.js + app.css + settings.html + settings.js + bridge.js
     └── samples/            默认工具：json-formatter、qrcode-generator
 
-tests/QTools.Tests/         14 个测试文件，纯单元 + 内存级集成
+tests/QTools.Tests/         22 个测试文件，纯单元 + 内存级集成
 ```
 
 运行期数据根目录（**不在仓库内**）：Windows `%APPDATA%\QTools`，macOS `~/Library/Application Support/QTools`，Linux `${XDG_DATA_HOME:-~/.local/share}/QTools`。
@@ -214,6 +215,25 @@ tests/QTools.Tests/         14 个测试文件，纯单元 + 内存级集成
 不要依赖任何人本地的 `core.autocrlf` 配置，也不要删这个文件。CI（`.github/workflows/dotnet-desktop.yml`）
 跑 Release 构建 + 单测 + 前端测试 + AOT 发布 + `--self-test`，push 后以上全部是远端门禁。
 
+### 7.14 拼音检索必须同时覆盖首字母与全拼，且不依赖运行时编码
+
+历史 bug：旧实现用 `Encoding.GetEncoding("GB2312")` 按区位反查声母，只能给首字母、没有全拼；
+用户对着「图片压缩」输入 `tupian` / `tupianyasuo` 毫无结果（仅 `tpys` 能命中），导入工具与在线工具受影响最明显。
+
+**约束**：`Text/PinyinInitials.cs` 只依赖静态表 `Text/PinyinData.Generated.cs`（GB2312 6763 字，多音字按常用度排列，
+数据源 mozillazg/pinyin-data，MIT），首字母 / 紧凑全拼 / 音节全拼 / 多音字变体全部由 `BuildSearchKey` 写入
+`searchKey`，前端仍只做子串匹配。**不要**改回运行时 `Encoding`/ICU 反查（Native AOT 与剪裁下不可靠），
+也不要手工编辑生成表。改动后跑 `PinyinInitialsTests`，并用真实数据（「图片压缩」→ `tupian`/`tpys`）回归。
+
+### 7.15 宽窗口是网格布局，靠 CSS 媒体查询自适应列数
+
+主窗口默认是 340px 细长条单列列表；`@media (min-width: 540px)` 下 `ul.nav-list` 改为
+`grid-template-columns: repeat(auto-fill, minmax(240px, 1fr))`，按窗口宽度自动排成 2/3/4 列卡片
+（条目加边框与底色），整块限宽 1180px 居中。断点取 540px 而不是 520px：侧栏内宽约等于窗口宽减 36px，
+520px 时内宽不足 2×240+7=487 只能排 1 列，卡片样式会先于多列出现。**约束**：不要给 `.nav-item` 写死宽度，也不要把
+badge / 使用次数拆成表格列——条目结构保持「图标 / `.nav-label` / `.nav-badge`」的自适应卡片，
+右键原位菜单、重命名、隐藏/删除都依赖 `li` 内的原位切换。内容窗口（`mode-content`）不受影响。
+
 ---
 
 ## 8. 平台事实（不要假装全平台都是 WebKit）
@@ -254,8 +274,8 @@ tests/QTools.Tests/         14 个测试文件，纯单元 + 内存级集成
 5. **PowerShell 里 `"$(id)"` 会被当子表达式求值**。生成含 `$(...)` 的代码时用编辑工具写文件，别用字符串拼接。
 
 **测试分层**：
-- `dotnet test`：纯单元 + 内存级集成（真实 `BridgeDispatcher.DispatchAsync` + 临时目录）。当前 354 个（含内嵌凭证、索引程序隐藏、拼音搜索、备份/Git、流式取消链路、索引原子覆盖、内容窗口初始定位、在线工具、原位菜单定位）。
-- `node --test tests/*.cjs`：前端行为级测试（vm 沙箱 + DOM shim，跑 `app.js`/`bridge.js`/示例工具页面）。当前 116 个。注意：vm 沙箱里创建的对象带另一套原型，断言前先用 `JSON.parse(JSON.stringify(...))` 归一化。
+- `dotnet test`：纯单元 + 内存级集成（真实 `BridgeDispatcher.DispatchAsync` + 临时目录）。当前 378 个（含内嵌凭证、索引程序隐藏、拼音首字母/全拼检索、备份/Git、流式取消链路、索引原子覆盖、内容窗口初始定位、在线工具、原位菜单定位、小工具/在线工具重命名）。
+- `node --test tests/*.cjs`：前端行为级测试（vm 沙箱 + DOM shim，跑 `app.js`/`bridge.js`/示例工具页面）。当前 126 个。注意：vm 沙箱里创建的对象带另一套原型，断言前先用 `JSON.parse(JSON.stringify(...))` 归一化。
 - `--self-test`：真起 Kestrel，27 项 HTTP 断言（host 头校验、路径穿越、工具资源、设置页、品牌图标；其中工具资源每工具 3 项，数量随已装工具数浮动）。
 - ad-hoc 验收脚本：**不入库**，历史脚本在 `%TEMP%`。GUI 真机验证可用 WebView2 远程调试：启动时设 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=<port> --remote-debugging-address=127.0.0.1`，再用 CDP（`/json/list` + WebSocket）注入 JS / 截图；日志断言（`-> ok`、`已打开...窗口`）仍是最轻量的手段。
 
@@ -264,7 +284,7 @@ tests/QTools.Tests/         14 个测试文件，纯单元 + 内存级集成
 ## 11. 提交前检查清单
 
 - [ ] `dotnet build` → 0 error / 0 warning
-- [ ] `dotnet test` → 全绿（当前基线 **354**）
+- [ ] `dotnet test` → 全绿（当前基线 **378**）
 - [ ] `node --test tests/app.test.cjs` → 全绿（改过 `app.js` 时必须跑）
 - [ ] `--self-test` → **27 PASS / 0 FAIL**，退出码 0
 - [ ] `dotnet publish -c Release` → **0 AOT warning**

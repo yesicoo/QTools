@@ -134,6 +134,50 @@ public sealed class WebToolStore
         return loaded;
     }
 
+    /// <summary>
+    /// 重命名在线工具：只改 web.json 的 name，锁定 id / 网址 / 目录 / 类别 / 图标不变，
+    /// 校验后原子写入并重扫（使用频次与窗口绑定都不受改名影响）。
+    /// </summary>
+    public LoadedWebTool Rename(string webId, string newName)
+    {
+        var tool = _registry.Find(webId);
+        if (tool is null)
+        {
+            throw new BridgeException("WEB_NOT_FOUND", $"未找到在线工具 '{webId}'");
+        }
+
+        var name = newName.Trim();
+        var updated = tool.Entry with { Name = name };
+        var errors = WebToolValidator.Validate(updated, Path.GetFileName(tool.Directory));
+        if (errors.Count > 0)
+        {
+            throw new BridgeException("WEB_INVALID", $"重命名后校验失败：{string.Join("；", errors)}");
+        }
+
+        var manifestPath = Path.Combine(tool.Directory, "web.json");
+        try
+        {
+            var json = JsonSerializer.Serialize(updated, AppJsonContext.Default.WebToolEntry);
+            var temp = manifestPath + ".rename-tmp";
+            File.WriteAllText(temp, json, new UTF8Encoding(false));
+            File.Move(temp, manifestPath, overwrite: true);
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"重命名在线工具失败 {webId}", ex);
+            throw new BridgeException("WEB_RENAME_FAILED", $"重命名失败：{ex.Message}");
+        }
+
+        var reloaded = _registry.Reload(webId);
+        if (reloaded is null || !reloaded.IsValid)
+        {
+            throw new BridgeException("WEB_RENAME_FAILED", "重命名后在线工具无法加载，请检查 web.json");
+        }
+
+        Log.Info($"已重命名在线工具 {webId}：「{tool.Name}」→「{name}」");
+        return reloaded;
+    }
+
     /// <summary>删除一个在线工具（只删启动配置，不影响目标网站）。</summary>
     public bool Delete(string webId)
     {

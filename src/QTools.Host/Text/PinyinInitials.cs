@@ -3,39 +3,27 @@ using System.Text;
 namespace QTools.Host.Text;
 
 /// <summary>
-/// 拼音首字母提取：基于 GB2312 一级汉字区（0xB0A1–0xD7F9，按拼音排序）的边界表。
-/// 覆盖常用汉字；二级汉字（按部首排序）与生僻字不做猜测，直接跳过，避免错误匹配。
-/// 纯函数 + 静态编码表，AOT/剪裁安全（CodePages 提供程序为数据驱动，不依赖 ICU）。
+/// 拼音检索键：基于构建期生成的静态表（GB2312 常用汉字 6763 个，含多音字），
+/// 同时支持首字母（计算器 → jsq）与全拼（jisuanqi / ji suan qi）。
+/// 纯函数 + 静态数据，不依赖运行时编码提供程序与 ICU，AOT/剪裁安全。
+/// 表外字符（生僻字、扩展区汉字）不做猜测，直接跳过，避免错误匹配。
 /// </summary>
 public static class PinyinInitials
 {
-    private static readonly Encoding? Gb2312 = LoadGb2312();
+    /// <summary>单个词条最多生成的多音字全拼变体数，避免极端名字把检索键撑爆。</summary>
+    private const int MaxCompactVariants = 8;
 
-    /// <summary>GB2312 一级汉字各拼音首字母的起始区位码（升序）。</summary>
-    private static readonly (int Code, char Initial)[] Boundaries =
-    [
-        (0xB0A1, 'a'), (0xB0C5, 'b'), (0xB2C1, 'c'), (0xB4EE, 'd'),
-        (0xB6EA, 'e'), (0xB7A2, 'f'), (0xB8C1, 'g'), (0xB9FE, 'h'),
-        (0xBBF7, 'j'), (0xBFA6, 'k'), (0xC0AC, 'l'), (0xC2E8, 'm'),
-        (0xC4C3, 'n'), (0xC5B6, 'o'), (0xC5BE, 'p'), (0xC6DA, 'q'),
-        (0xC8BB, 'r'), (0xC8F6, 's'), (0xCBFA, 't'), (0xCDDA, 'w'),
-        (0xCEF4, 'x'), (0xD1B9, 'y'), (0xD4D1, 'z'),
-    ];
+    private static readonly Dictionary<char, string> Readings = BuildReadings();
 
-    private const int FirstLevelEnd = 0xD7F9;
-
-    private static Encoding? LoadGb2312()
+    private static Dictionary<char, string> BuildReadings()
     {
-        try
+        var map = new Dictionary<char, string>(PinyinData.Entries.Length);
+        foreach (var (ch, readings) in PinyinData.Entries)
         {
-            Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
-            return Encoding.GetEncoding("GB2312");
+            map[ch] = readings;
         }
-        catch (Exception ex) when (ex is ArgumentException or NotSupportedException)
-        {
-            // 编码表不可用时退化为「仅 ASCII」，搜索仍可用（只是没有拼音能力）
-            return null;
-        }
+
+        return map;
     }
 
     /// <summary>提取字符串的检索键：ASCII 字母数字原样小写，常用汉字取拼音首字母，其余跳过。</summary>
@@ -57,49 +45,173 @@ public static class PinyinInitials
             {
                 builder.Append(char.ToLowerInvariant(ch));
             }
-            else if (ch >= 0x4E00 && ch <= 0x9FFF && Gb2312 is not null)
+            else if (Readings.TryGetValue(ch, out var readings))
             {
-                var initial = InitialOf(ch);
-                if (initial != '\0')
-                {
-                    builder.Append(initial);
-                }
+                builder.Append(readings[0]);
             }
         }
 
         return builder.ToString();
     }
 
-    /// <summary>组合检索键：原文（小写、空格分隔）+ 各段拼音首字母，前端做子串匹配即可同时命中中文/拼音/英文。</summary>
-    public static string BuildSearchKey(params string?[] parts)
+    /// <summary>紧凑全拼（去声调）：汉字取主读音，ASCII 字母数字原样小写，其余跳过。</summary>
+    public static string FullOf(string? text)
     {
-        var raw = string.Join(' ', parts.Where(p => !string.IsNullOrWhiteSpace(p))).ToLowerInvariant();
-        var initials = string.Join(' ', parts.Select(Of).Where(s => s.Length > 0));
-        return initials.Length > 0 ? raw + " " + initials : raw;
-    }
-
-    private static char InitialOf(char ch)
-    {
-        var bytes = Gb2312!.GetBytes(ch.ToString());
-        if (bytes.Length != 2)
+        if (string.IsNullOrEmpty(text))
         {
-            return '\0';
+            return string.Empty;
         }
 
-        var code = (bytes[0] << 8) | bytes[1];
-        if (code < Boundaries[0].Code || code > FirstLevelEnd)
+        var builder = new StringBuilder(text.Length * 4);
+        foreach (var ch in text)
         {
-            return '\0';
-        }
-
-        for (var i = Boundaries.Length - 1; i >= 0; i--)
-        {
-            if (code >= Boundaries[i].Code)
+            if (ch is >= 'a' and <= 'z' or >= '0' and <= '9')
             {
-                return Boundaries[i].Initial;
+                builder.Append(ch);
+            }
+            else if (ch is >= 'A' and <= 'Z')
+            {
+                builder.Append(char.ToLowerInvariant(ch));
+            }
+            else if (Readings.TryGetValue(ch, out var readings))
+            {
+                builder.Append(Primary(readings));
             }
         }
 
-        return '\0';
+        return builder.ToString();
+    }
+
+    /// <summary>音节分隔全拼：ASCII 词原样保留，汉字按主读音逐个输出（多音字次读音见紧凑变体）。</summary>
+    public static string FullSpacedOf(string? text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return string.Empty;
+        }
+
+        var tokens = new List<string>(text.Length * 2);
+        var word = new StringBuilder(8);
+        foreach (var ch in text)
+        {
+            if (ch is >= 'a' and <= 'z' or >= '0' and <= '9')
+            {
+                word.Append(ch);
+            }
+            else if (ch is >= 'A' and <= 'Z')
+            {
+                word.Append(char.ToLowerInvariant(ch));
+            }
+            else
+            {
+                if (word.Length > 0)
+                {
+                    tokens.Add(word.ToString());
+                    word.Clear();
+                }
+
+                if (Readings.TryGetValue(ch, out var readings))
+                {
+                    tokens.Add(Primary(readings));
+                }
+            }
+        }
+
+        if (word.Length > 0)
+        {
+            tokens.Add(word.ToString());
+        }
+
+        return string.Join(' ', tokens);
+    }
+
+    /// <summary>
+    /// 组合检索键：原文（小写）+ 各段拼音首字母 + 紧凑全拼 + 音节全拼。
+    /// 前端做子串匹配即可同时命中中文、拼音首字母、全拼与英文。
+    /// </summary>
+    public static string BuildSearchKey(params string?[] parts)
+    {
+        var tokens = new List<string>(parts.Length * 4 + 1);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
+        void Add(string? token)
+        {
+            if (!string.IsNullOrEmpty(token) && seen.Add(token))
+            {
+                tokens.Add(token);
+            }
+        }
+
+        Add(string.Join(' ', parts.Where(p => !string.IsNullOrWhiteSpace(p))).ToLowerInvariant());
+        foreach (var part in parts)
+        {
+            if (string.IsNullOrWhiteSpace(part))
+            {
+                continue;
+            }
+
+            Add(Of(part));
+            Add(FullSpacedOf(part));
+            foreach (var variant in CompactVariants(part))
+            {
+                Add(variant);
+            }
+        }
+
+        return string.Join(' ', tokens);
+    }
+
+    /// <summary>紧凑全拼组合：多音字轮换次读音，最多 <see cref="MaxCompactVariants"/> 个（含主读音）。</summary>
+    private static List<string> CompactVariants(string text)
+    {
+        var variants = new List<string> { string.Empty };
+        foreach (var ch in text)
+        {
+            string[] options;
+            if (ch is >= 'a' and <= 'z' or >= '0' and <= '9')
+            {
+                options = [ch.ToString()];
+            }
+            else if (ch is >= 'A' and <= 'Z')
+            {
+                options = [char.ToLowerInvariant(ch).ToString()];
+            }
+            else if (Readings.TryGetValue(ch, out var readings))
+            {
+                options = readings.Split(' ');
+            }
+            else
+            {
+                continue;
+            }
+
+            var next = new List<string>(Math.Min(MaxCompactVariants, variants.Count * options.Length));
+            foreach (var prefix in variants)
+            {
+                foreach (var option in options)
+                {
+                    next.Add(prefix + option);
+                    if (next.Count == MaxCompactVariants)
+                    {
+                        break;
+                    }
+                }
+
+                if (next.Count == MaxCompactVariants)
+                {
+                    break;
+                }
+            }
+
+            variants = next;
+        }
+
+        return variants;
+    }
+
+    private static string Primary(string readings)
+    {
+        var space = readings.IndexOf(' ');
+        return space < 0 ? readings : readings[..space];
     }
 }

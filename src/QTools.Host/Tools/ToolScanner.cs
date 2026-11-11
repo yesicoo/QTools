@@ -119,6 +119,42 @@ public sealed class ToolRegistry
         return Reload(toolId) ?? tool;
     }
 
+    /// <summary>
+    /// 重命名工具：只改 manifest.name，锁定 id/entry/version 不变（工具身份不漂移，
+    /// 目录、存储隔离、窗口绑定均不受影响），校验后原子写入并重扫。
+    /// </summary>
+    public LoadedTool Rename(string toolId, string newName)
+    {
+        LoadedTool? tool;
+        lock (_gate)
+        {
+            if (!_tools.TryGetValue(toolId, out tool))
+            {
+                throw new BridgeException("TOOL_NOT_FOUND", $"未找到工具 '{toolId}'");
+            }
+        }
+
+        var name = newName.Trim();
+        var updated = tool.Manifest with { Name = name };
+        var errors = ToolManifestValidator.Validate(updated, Path.GetFileName(tool.Directory));
+        if (errors.Count > 0)
+        {
+            throw new BridgeException("MANIFEST_INVALID", $"重命名后 manifest 校验失败：{string.Join("；", errors)}");
+        }
+
+        var manifestPath = Path.Combine(tool.Directory, "manifest.json");
+        var json = System.Text.Json.JsonSerializer.Serialize(
+            updated, QTools.Host.Serialization.AppJsonContext.Default.ToolManifest);
+        var temp = manifestPath + ".rename-tmp";
+        File.WriteAllText(temp, json);
+        File.Move(temp, manifestPath, overwrite: true);
+
+        var reloaded = Reload(toolId)
+            ?? throw new BridgeException("TOOL_NOT_FOUND", $"重命名后工具 '{toolId}' 无法加载");
+        Log.Info($"已重命名工具 {toolId}：「{tool.Name}」→「{name}」");
+        return reloaded;
+    }
+
     public IReadOnlyList<LoadedTool> GetAll()
     {
         lock (_gate)

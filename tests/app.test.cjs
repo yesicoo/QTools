@@ -9,6 +9,8 @@ const html = fs.readFileSync(`${ui}/index.html`, 'utf8');
 const flush = () => new Promise(setImmediate);
 /* vm 沙箱里创建的对象带另一套原型，deepStrictEqual 前先转成宿主 realm 的纯对象 */
 const plain = value => JSON.parse(JSON.stringify(value));
+/* 列表条目固定为 图标/名称/类型/详情(badge)/使用(uses)，表格列位依赖这些节点始终存在 */
+const badgeOf = node => node.children.find(c => c.hasClass('nav-badge'));
 
 const tools = ['a', 'b'].map(id => ({ id, name: `工具${id}`, version: '1.2.3', isValid: true }));
 const item = (over = {}) => ({
@@ -164,8 +166,8 @@ test('主窗口渲染统一列表（小工具+本机程序混排）并显示索�
   assert.equal(h.el('index-status').textContent, '已索引 2 个本机程序');
   assert.equal(h.el('side-empty').hidden, true);
   assert.ok(h.navItem('program:gone').hasClass('broken'));
-  assert.equal(h.navItem('tool:a').children.at(-1).textContent, 'v1.2.3');
-  assert.equal(h.navItem('app:editor').children.at(-1).textContent, '开发');
+  assert.equal(badgeOf(h.navItem('tool:a')).textContent, 'v1.2.3');
+  assert.equal(badgeOf(h.navItem('app:editor')).textContent, '开发');
 });
 
 test('索引中显示进度文案，空索引显示提示', async () => {
@@ -236,6 +238,24 @@ test('搜索过滤统一列表，无匹配时显示空状态', async () => {
   assert.equal(h.el('side-empty').hidden, false);
 });
 
+test('搜索支持首字母与全拼（searchKey 由后端组合）', async () => {
+  const list = [
+    item({ id: 'web-x', kind: 'web', name: '图片压缩', searchKey: '图片压缩 web-x tpys tupianyasuo tu pian ya suo' }),
+    item({ id: 'tool-y', kind: 'tool', name: '计算器', searchKey: '计算器 calc jsq jisuanqi ji suan qi' })
+  ];
+  const h = await setup({ list });
+  const search = h.el('search');
+  const keys = () => h.el('nav-list').children.map(li => li.children[0].dataset.key);
+  for (const term of ['tpys', 'tupian', 'tupianyasuo', 'tu pian', '图片']) {
+    search.value = term;
+    search.fire('input');
+    assert.deepEqual(keys(), ['web:web-x'], `全拼/首字母未命中：${term}`);
+  }
+  search.value = 'JISUANQI';
+  search.fire('input');
+  assert.deepEqual(keys(), ['tool:tool-y'], '全拼应忽略大小写');
+});
+
 test('列表刷新失败保留已有列表并显示错误', async () => {
   const h = await setup();
   const before = h.el('nav-list').children.map(li => li.children[0].dataset.key);
@@ -298,9 +318,9 @@ test('在线工具：点击独立窗口打开，原位菜单「打开网址/删�
     item({ id: 'bad', kind: 'web', name: '坏站', searchKey: '坏站', isValid: false })
   ];
   const h = await setup({ list });
-  assert.equal(h.navItem('web:site').children.at(-1).textContent, '资讯');
+  assert.equal(badgeOf(h.navItem('web:site')).textContent, '资讯');
   assert.ok(h.navItem('web:bad').hasClass('broken'));
-  assert.match(h.navItem('web:bad').children.at(-1).textContent, /配置无效/);
+  assert.match(badgeOf(h.navItem('web:bad')).textContent, /配置无效/);
 
   h.navItem('web:site').click();
   assert.deepEqual(plain(h.last('openWebTool').payload), { webId: 'site' });
@@ -314,10 +334,31 @@ test('在线工具：点击独立窗口打开，原位菜单「打开网址/删�
 
   h.navItem('web:site').fire('contextmenu', { preventDefault() {} });
   li = h.liOf('web:site');
-  h.menuAction(li, 2).click();
+  h.menuAction(li, 3).click();
   assert.deepEqual(plain(h.last('deleteWebTool').payload), { webId: 'site' });
   await h.reply('deleteWebTool', { ok: true });
   assert.match(h.el('toast').textContent, /已删除 资讯站/);
+});
+
+test('在线工具菜单含「重命名」，原位表单走 renameWebTool', async () => {
+  const list = [...items, item({ id: 'site', kind: 'web', name: '资讯站', searchKey: '资讯站', category: '资讯' })];
+  const h = await setup({ list });
+  h.navItem('web:site').fire('contextmenu', { preventDefault() {} });
+  const li = h.liOf('web:site');
+  const labels = h.menuOf(li).children[0].children.map(b => b.children[0].textContent);
+  assert.deepEqual(labels, ['详情', '打开网址', '重命名', '删除']);
+
+  h.menuAction(li, 2).click();
+  const form = h.menuOf(li).children[2];
+  assert.equal(form.children[0].textContent, '重命名在线工具');
+  assert.equal(form.children[1].value, '资讯站', '输入框预填当前名称');
+
+  form.children[1].value = '  新资讯站  ';
+  form.children[2].children[0].click();
+  assert.deepEqual(plain(h.last('renameWebTool').payload), { webId: 'site', name: '新资讯站' });
+  await h.reply('renameWebTool', { ok: true });
+  assert.match(h.el('toast').textContent, /已重命名为「新资讯站」/);
+  assert.equal(h.requests('launcherList').length, 2, '成功后刷新统一列表');
 });
 
 test('配置无效的在线工具点击只提示不打开', async () => {
@@ -350,7 +391,7 @@ test('右键小工具：原位菜单「删除」走 deleteTool', async () => {
   const h = await setup();
   h.navItem('tool:a').fire('contextmenu', { preventDefault() {} });
   const li = h.liOf('tool:a');
-  h.menuAction(li, 2).click();
+  h.menuAction(li, 3).click();
   assert.deepEqual(plain(h.last('deleteTool').payload), { toolId: 'a', deleteStorage: true });
   await h.reply('deleteTool', { ok: true });
   assert.equal(h.requests('launcherList').length, 2);
@@ -422,6 +463,105 @@ test('菜单「属性」调用 revealItem 并收起菜单', async () => {
   h.menuAction(li, 1).click();
   assert.deepEqual(plain(h.last('revealItem').payload), { kind: 'app', id: 'editor' });
   assert.equal(h.navItem('app:editor').hidden, false);
+});
+
+/* ================= 小工具原位重命名 ================= */
+
+const renameForm = (h, li) => h.menuOf(li).children[2];
+const renameInput = (h, li) => renameForm(h, li).children[1];
+const renameOk = (h, li) => renameForm(h, li).children[2].children[0];
+const renameCancel = (h, li) => renameForm(h, li).children[2].children[1];
+const openRename = h => {
+  h.navItem('tool:a').fire('contextmenu', { preventDefault() {} });
+  const li = h.liOf('tool:a');
+  h.menuAction(li, 2).click();   /* 详情0 / 属性1 / 重命名2 / 删除3 */
+  return li;
+};
+
+test('小工具菜单含「重命名」，点击原位展开预填表单', async () => {
+  const h = await setup();
+  h.navItem('tool:a').fire('contextmenu', { preventDefault() {} });
+  const li = h.liOf('tool:a');
+  const labels = h.menuOf(li).children[0].children.map(b => b.children[0].textContent);
+  assert.deepEqual(labels, ['详情', '属性', '重命名', '删除']);
+
+  h.menuAction(li, 2).click();
+  const menu = h.menuOf(li);
+  assert.equal(menu.children[0].hidden, true, '展开重命名时隐藏动作区');
+  assert.equal(menu.children[1].hidden, true, '展开重命名时隐藏详情');
+  assert.equal(renameForm(h, li).hidden, false);
+  assert.equal(renameInput(h, li).value, '工具a', '输入框预填当前名称');
+});
+
+test('重命名：确认 trim 后调用 renameTool，成功收起并刷新列表', async () => {
+  const h = await setup();
+  const li = openRename(h);
+  renameInput(h, li).value = '  新名称  ';
+  renameOk(h, li).click();
+  assert.deepEqual(plain(h.last('renameTool').payload), { toolId: 'a', name: '新名称' });
+  await h.reply('renameTool', { ok: true });
+  assert.match(h.el('toast').textContent, /已重命名为「新名称」/);
+  assert.equal(h.navItem('tool:a').hidden, false, '成功后应还原条目按钮');
+  assert.equal(h.requests('launcherList').length, 2, '成功后刷新统一列表');
+});
+
+test('重命名：取消返回动作区，不发起请求', async () => {
+  const h = await setup();
+  const li = openRename(h);
+  renameInput(h, li).value = '改了但不提交';
+  renameCancel(h, li).click();
+  assert.equal(renameForm(h, li).hidden, true);
+  assert.equal(h.menuOf(li).children[0].hidden, false, '取消应恢复动作区');
+  assert.equal(h.requests('renameTool').length, 0);
+});
+
+test('重命名：空名拦截不发起请求', async () => {
+  const h = await setup();
+  const li = openRename(h);
+  renameInput(h, li).value = '   ';
+  renameOk(h, li).click();
+  assert.equal(h.requests('renameTool').length, 0);
+  assert.match(h.el('toast').textContent, /名称不能为空/);
+  assert.equal(renameForm(h, li).hidden, false, '拦截后表单仍在');
+});
+
+test('重命名：输入框 Enter 提交', async () => {
+  const h = await setup();
+  const li = openRename(h);
+  renameInput(h, li).value = '回车名';
+  renameInput(h, li).fire('keydown', { key: 'Enter', preventDefault() {} });
+  assert.deepEqual(plain(h.last('renameTool').payload), { toolId: 'a', name: '回车名' });
+});
+
+test('重命名：与原名相同直接收起，不发起请求', async () => {
+  const h = await setup();
+  const li = openRename(h);
+  renameInput(h, li).value = '工具a';
+  renameOk(h, li).click();
+  assert.equal(h.requests('renameTool').length, 0);
+  assert.equal(h.navItem('tool:a').hidden, false);
+});
+
+test('重命名：失败恢复确认按钮并提示', async () => {
+  const h = await setup();
+  const li = openRename(h);
+  renameInput(h, li).value = '新名';
+  renameOk(h, li).click();
+  assert.equal(renameOk(h, li).disabled, true, '提交中禁用确认');
+  h.last('renameTool').reject({ code: 'MANIFEST_INVALID', message: '校验失败' });
+  await flush();
+  assert.equal(renameOk(h, li).disabled, false, '失败后恢复确认');
+  assert.match(h.el('toast').textContent, /重命名失败/);
+  assert.equal(renameForm(h, li).hidden, false, '失败后表单仍在');
+});
+
+test('本机程序菜单不含「重命名」（小工具与在线工具才有）', async () => {
+  const h = await setup();
+  h.navItem('app:editor').fire('contextmenu', { preventDefault() {} });
+  const li = h.liOf('app:editor');
+  const labels = h.menuOf(li).children[0].children.map(b => b.children[0].textContent);
+  assert.deepEqual(labels, ['详情', '属性', '移除']);
+  assert.equal(h.menuOf(li).children.length, 2, '非小工具不构建重命名表单');
 });
 
 /* ================= 内容窗口：路由与内嵌 ================= */

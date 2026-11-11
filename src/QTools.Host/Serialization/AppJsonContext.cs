@@ -98,7 +98,7 @@ internal sealed record StorageGetResult(bool Found, JsonElement Value);
 /// <summary>storage.list 结果。</summary>
 internal sealed record StorageListResult(IReadOnlyList<string> Keys);
 
-/// <summary>工具列表项（manager.listTools）。SearchKey 含拼音首字母，供前端快速匹配。</summary>
+/// <summary>工具列表项（manager.listTools）。SearchKey 含拼音首字母与全拼，供前端子串匹配。</summary>
 internal sealed record ToolListItem(
     string Id,
     string Name,

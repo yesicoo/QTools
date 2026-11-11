@@ -388,6 +388,7 @@
   /* 菜单图标：内联 SVG（feather 风格，stroke 随文字色），与底部 dock 的图标语言一致 */
   var MENU_ICONS = {
     detail: '<circle cx="12" cy="12" r="9"/><path d="M12 8h.01M12 11v5"/>',
+    edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
     folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
     globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18 15 15 0 0 1 0-18z"/>',
     trash: '<path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 13h10l1-13"/>',
@@ -423,6 +424,8 @@
     });
     detailEl.appendChild(backBtn);
 
+    var renameEl = null;   /* 小工具 / 在线工具专用：原位重命名表单 */
+
     function menuAction(label, cls, handler, icon) {
       var a = document.createElement("button");
       a.type = "button";
@@ -446,6 +449,76 @@
       menuAction("属性", "", function () { revealItem(item); }, "folder");
     }
 
+    if (item.kind === "tool" || item.kind === "web") {
+      var isWeb = item.kind === "web";
+      renameEl = document.createElement("div");
+      renameEl.className = "menu-rename";
+      renameEl.hidden = true;
+
+      var renameTitle = document.createElement("div");
+      renameTitle.className = "menu-rename-title";
+      renameTitle.textContent = isWeb ? "重命名在线工具" : "重命名小工具";
+      renameEl.appendChild(renameTitle);
+
+      var renameInput = document.createElement("input");
+      renameInput.type = "text";
+      renameInput.className = "menu-rename-input";
+      renameInput.value = item.name;
+      renameInput.maxLength = 60;
+      renameInput.placeholder = "工具名称";
+      renameEl.appendChild(renameInput);
+
+      var renameRow = document.createElement("div");
+      renameRow.className = "menu-rename-row";
+      var renameOk = document.createElement("button");
+      renameOk.type = "button";
+      renameOk.className = "btn primary sm menu-rename-ok";
+      renameOk.textContent = "确认";
+      var renameCancel = document.createElement("button");
+      renameCancel.type = "button";
+      renameCancel.className = "btn ghost sm menu-rename-cancel";
+      renameCancel.textContent = "取消";
+      renameRow.appendChild(renameOk);
+      renameRow.appendChild(renameCancel);
+      renameEl.appendChild(renameRow);
+
+      var submitRename = function () {
+        var name = renameInput.value.trim();
+        if (!name) { toast("名称不能为空", true); renameInput.focus(); return; }
+        if (name.length > 60) { toast("名称不超过 60 字符", true); renameInput.focus(); return; }
+        if (name === item.name) { closeItemMenu(); return; }
+        renameOk.disabled = true;
+        host.callManager(
+          isWeb ? "manager.renameWebTool" : "manager.renameTool",
+          isWeb ? { webId: item.id, name: name } : { toolId: item.id, name: name }
+        ).then(function () {
+          closeItemMenu();
+          toast("已重命名为「" + name + "」");
+          refreshLauncher();
+        }, function (e) {
+          renameOk.disabled = false;
+          toast("重命名失败：" + errText(e), true);
+        });
+      };
+
+      renameOk.addEventListener("click", submitRename);
+      renameCancel.addEventListener("click", function () {
+        renameEl.hidden = true;
+        actionsEl.hidden = false;
+      });
+      renameInput.addEventListener("keydown", function (e) {
+        if (e.key === "Enter") { if (e.preventDefault) { e.preventDefault(); } submitRename(); }
+      });
+
+      menuAction("重命名", "", function () {
+        actionsEl.hidden = true;
+        detailEl.hidden = true;
+        renameEl.hidden = false;
+        renameInput.focus();
+        renameInput.select();
+      }, "edit");
+    }
+
     menuAction(item.kind === "app" ? "移除" : item.kind === "program" ? "隐藏" : "删除", "danger", function () {
       closeItemMenu();
       if (item.kind === "app") { deleteApp(item); }
@@ -464,6 +537,7 @@
     });
     menuEl.appendChild(actionsEl);
     menuEl.appendChild(detailEl);
+    if (renameEl) { menuEl.appendChild(renameEl); }
 
     li.appendChild(menuEl);
     openMenuState = { key: itemMenuKey(item), item: item, li: li, btn: btn, menuEl: menuEl, actionsEl: actionsEl, detailEl: detailEl };

@@ -187,6 +187,48 @@ public sealed class WebToolTests : IDisposable
     }
 
     [Fact]
+    public async Task RenameChangesDisplayNameAndPreservesIdentity()
+    {
+        var loaded = await _store.AddAsync("资讯站", "https://example.com/news", "资讯", "🌐", CancellationToken.None);
+        var createdAt = loaded.Entry.CreatedAt;
+
+        var renamed = _store.Rename(loaded.Id, "  新资讯站  ");
+
+        Assert.Equal("新资讯站", renamed.Name);
+        Assert.Equal(loaded.Id, renamed.Id);
+        Assert.Equal("https://example.com/news", renamed.Entry.Url);
+        Assert.Equal("资讯", renamed.Entry.Category);
+        Assert.Equal("🌐", renamed.Entry.Glyph);
+        Assert.Equal(createdAt, renamed.Entry.CreatedAt);
+
+        // 落盘持久化：新名写入、id/目录不变
+        var path = Path.Combine(_root, "webtools", loaded.Id, "web.json");
+        var persisted = JsonSerializer.Deserialize(
+            File.ReadAllText(path), AppJsonContext.Default.WebToolEntry)!;
+        Assert.Equal("新资讯站", persisted.Name);
+        Assert.Equal(loaded.Id, persisted.Id);
+        Assert.True(Directory.Exists(Path.Combine(_root, "webtools", loaded.Id)));
+        Assert.False(Directory.Exists(Path.Combine(_root, "webtools", "新资讯站")));
+    }
+
+    [Fact]
+    public async Task RenameRejectsUnknownEmptyAndTooLongNames()
+    {
+        var loaded = await _store.AddAsync("GitHub", "https://github.com", null, null, CancellationToken.None);
+
+        var missing = Assert.Throws<BridgeException>(() => _store.Rename("ghost", "x"));
+        Assert.Equal("WEB_NOT_FOUND", missing.Code);
+
+        var empty = Assert.Throws<BridgeException>(() => _store.Rename(loaded.Id, "   "));
+        Assert.Equal("WEB_INVALID", empty.Code);
+
+        var tooLong = Assert.Throws<BridgeException>(() => _store.Rename(loaded.Id, new string('名', 61)));
+        Assert.Equal("WEB_INVALID", tooLong.Code);
+
+        Assert.Equal("GitHub", _webTools.Find(loaded.Id)!.Name);
+    }
+
+    [Fact]
     public void RescanRejectsInvalidEntryButKeepsOthers()
     {
         var good = Path.Combine(_root, "webtools", "good");
@@ -250,7 +292,7 @@ public sealed class WebToolTests : IDisposable
     [Fact]
     public async Task WebToolMethodsAreHostOnly()
     {
-        foreach (var method in new[] { "manager.addWebTool", "manager.deleteWebTool", "manager.openWebTool" })
+        foreach (var method in new[] { "manager.addWebTool", "manager.deleteWebTool", "manager.renameWebTool", "manager.openWebTool" })
         {
             var response = await DispatchAsync(method, new { name = "x", url = "https://x", webId = "x" }, "evil");
             Assert.Equal("PERMISSION_DENIED", ErrorCode(response));
@@ -278,6 +320,51 @@ public sealed class WebToolTests : IDisposable
 
         var removeAgain = await DispatchAsync("manager.deleteWebTool", new { webId = "github" }, BridgeDispatcher.HostToolId);
         Assert.False(removeAgain.GetProperty("result").GetProperty("ok").GetBoolean());
+    }
+
+    [Fact]
+    public async Task RenameWebToolViaBridgeUpdatesListNameAndSearchKey()
+    {
+        await _store.AddAsync("GitHub", "https://github.com", null, null, CancellationToken.None);
+
+        var rename = await DispatchAsync("manager.renameWebTool",
+            new { webId = "github", name = "代码仓库" }, BridgeDispatcher.HostToolId);
+        Assert.True(rename.GetProperty("result").GetProperty("ok").GetBoolean(), rename.GetRawText());
+        Assert.Equal("代码仓库", _webTools.Find("github")!.Name);
+
+        var list = await DispatchAsync("manager.launcherList", new { }, BridgeDispatcher.HostToolId);
+        var item = list.GetProperty("result").GetProperty("items").EnumerateArray()
+            .Single(i => i.GetProperty("kind").GetString() == "web");
+        Assert.Equal("代码仓库", item.GetProperty("name").GetString());
+        Assert.Equal("github", item.GetProperty("id").GetString());
+        // 改名后统一列表的检索键同步更新（全拼 daimacangku + 首字母 dmck）
+        var searchKey = item.GetProperty("searchKey").GetString()!;
+        Assert.Contains("daimacangku", searchKey);
+        Assert.Contains("dmck", searchKey);
+    }
+
+    [Fact]
+    public async Task RenameWebToolRejectsBadPayloads()
+    {
+        await _store.AddAsync("GitHub", "https://github.com", null, null, CancellationToken.None);
+
+        var empty = await DispatchAsync("manager.renameWebTool",
+            new { webId = "github", name = "   " }, BridgeDispatcher.HostToolId);
+        Assert.Equal("BRIDGE_BAD_REQUEST", ErrorCode(empty));
+
+        var tooLong = await DispatchAsync("manager.renameWebTool",
+            new { webId = "github", name = new string('名', 61) }, BridgeDispatcher.HostToolId);
+        Assert.Equal("BRIDGE_BAD_REQUEST", ErrorCode(tooLong));
+
+        var missingName = await DispatchAsync("manager.renameWebTool",
+            new { webId = "github" }, BridgeDispatcher.HostToolId);
+        Assert.Equal("BRIDGE_BAD_REQUEST", ErrorCode(missingName));
+
+        var missing = await DispatchAsync("manager.renameWebTool",
+            new { webId = "ghost", name = "x" }, BridgeDispatcher.HostToolId);
+        Assert.Equal("WEB_NOT_FOUND", ErrorCode(missing));
+
+        Assert.Equal("GitHub", _webTools.Find("github")!.Name);
     }
 
     [Fact]

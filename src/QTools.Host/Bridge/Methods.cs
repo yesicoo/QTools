@@ -137,6 +137,16 @@ internal static class ManagerMethods
         return JsonSerializer.SerializeToElement(new OkResult(true), AppJsonContext.Default.OkResult);
     }
 
+    /// <summary>重命名小工具：只改显示名（manifest.name），工具 id/目录/版本保持不变。</summary>
+    public static System.Threading.Tasks.Task<JsonElement> RenameToolAsync(BridgeContext context)
+    {
+        var toolId = PayloadReader.ReadToolId(context.Payload);
+        var name = PayloadReader.ReadStringPayload(context.Payload, "name", required: true, maxLength: 60);
+        context.Registry!.Rename(toolId, name);
+        return System.Threading.Tasks.Task.FromResult(JsonSerializer.SerializeToElement(
+            new OkResult(true), AppJsonContext.Default.OkResult));
+    }
+
     public static System.Threading.Tasks.Task<JsonElement> GetAiConfigAsync(BridgeContext context)
     {
         var ai = context.Ai;
@@ -512,6 +522,21 @@ internal static class LauncherMethods
         var deleted = context.WebToolStore.Delete(webId);
         return JsonSerializer.SerializeToElement(
             new OkResult(deleted), AppJsonContext.Default.OkResult);
+    }
+
+    /// <summary>重命名在线工具：只改显示名（web.json 的 name），id/网址/目录保持不变。</summary>
+    public static System.Threading.Tasks.Task<JsonElement> RenameWebToolAsync(BridgeContext context)
+    {
+        if (context.WebToolStore is null)
+        {
+            throw new BridgeException("INTERNAL_ERROR", "在线工具存储未就绪");
+        }
+
+        var webId = PayloadReader.ReadStringPayload(context.Payload, "webId", required: true, maxLength: 63);
+        var name = PayloadReader.ReadStringPayload(context.Payload, "name", required: true, maxLength: 60);
+        context.WebToolStore.Rename(webId, name);
+        return System.Threading.Tasks.Task.FromResult(JsonSerializer.SerializeToElement(
+            new OkResult(true), AppJsonContext.Default.OkResult));
     }
 
     /// <summary>在独立 WebView 窗口在线打开一个已录入的网址。</summary>
