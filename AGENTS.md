@@ -267,6 +267,18 @@ DeepSeek 官方文档（2026-11）提供两个入口：OpenAI 兼容 `https://ap
 
 **约束**：不要把过滤写进后端 `LauncherListBuilder`（搜索需要完整列表）；不要在 `Record` 里顺带播种（会污染真实使用时间）；播种必须走 `EnsureSeeded`（不覆盖、`LastUsedUtc=""`）。回归测试见 `UsageStoreTests`（播种/幂等/持久化）、`UnifiedLauncherBridgeTests`（addApp 计 1 次）、`tests/app.test.cjs`（首页隐藏 0 次、搜索可见、清空搜索恢复）。
 
+### 7.20 元数据变更后必须主动推送 `launcher-changed` 刷新主窗口
+
+主窗口左侧列表的版本徽标（`vX.Y.Z`）来自 `manager.launcherList`，页面只在 `host-event: launcher-changed` 和窗口重新获得焦点时刷新，没有轮询。历史 bug：在内容窗口回滚版本后，主窗口徽标仍显示旧版本（内容窗口的版本面板本身已更新，造成“只有面板没变”的错觉）。
+
+**约束**：任何影响启动列表展示的后端变更（`manager.switchVersion`、`manager.applyUpdate` 等）成功后都要调用 `context.Shell?.NotifyLauncherChanged()`；该事件由 `ShellHost` 投递到主窗口并触发 `refreshLauncher`。不要依赖用户切回主窗口才刷新。
+
+### 7.21 流式输出预览要还原 JSON 转义（仅显示层）
+
+AI 流式输出是未解析的 JSON 源码，正文里的换行是 `\n` 两个字符、中文可能是 `\uXXXX`。历史 bug：预览区直接 `textContent += delta`，用户看到满屏字面 `\n`，误以为输出没有换行。
+
+**约束**：`app.js` 的 `beginStream` 维护 `state.rawOutput`，每次增量后整体经 `prettyStreamText` 还原（`\n`/`\r`/`\t`/`\"`/`\\`/`\uXXXX`）再写入 `<pre>`；转义序列可能被拆在两段增量之间，必须整段重算而不是逐段替换。思考分区是纯文本，不做还原。**只影响显示，不改变最终解析结果**；回归测试见 `tests/app.test.cjs`「AI 流式输出把 JSON 转义显示为真实换行」。
+
 ---
 
 ## 8. 平台事实（不要假装全平台都是 WebKit）
@@ -310,7 +322,7 @@ DeepSeek 官方文档（2026-11）提供两个入口：OpenAI 兼容 `https://ap
 
 **测试分层**：
 - `dotnet test`：纯单元 + 内存级集成（真实 `BridgeDispatcher.DispatchAsync` + 临时目录）。当前 436 个（含内嵌凭证、索引程序隐藏、拼音首字母/全拼检索、备份/Git、流式取消链路、索引原子覆盖、内容窗口初始定位、在线工具、原位菜单定位、小工具/在线工具重命名、统一属性字段、托盘菜单规划与弹层定位、主窗口尺寸记忆、内容窗口位置/尺寸记忆、AI 端点识别与双协议流式、使用次数播种）。
-- `node --test tests/*.cjs`：前端行为级测试（vm 沙箱 + DOM shim，跑 `app.js`/`bridge.js`/示例工具页面）。当前 133 个。注意：vm 沙箱里创建的对象带另一套原型，断言前先用 `JSON.parse(JSON.stringify(...))` 归一化。
+- `node --test tests/*.cjs`：前端行为级测试（vm 沙箱 + DOM shim，跑 `app.js`/`bridge.js`/示例工具页面）。当前 134 个。注意：vm 沙箱里创建的对象带另一套原型，断言前先用 `JSON.parse(JSON.stringify(...))` 归一化。
 - `--self-test`：真起 Kestrel，27 项 HTTP 断言（host 头校验、路径穿越、工具资源、设置页、品牌图标；其中工具资源每工具 3 项，数量随已装工具数浮动）。
 - ad-hoc 验收脚本：**不入库**，历史脚本在 `%TEMP%`。GUI 真机验证可用 WebView2 远程调试：启动时设 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=<port> --remote-debugging-address=127.0.0.1`，再用 CDP（`/json/list` + WebSocket）注入 JS / 截图；日志断言（`-> ok`、`已打开...窗口`）仍是最轻量的手段。
 

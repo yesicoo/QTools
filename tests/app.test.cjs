@@ -736,6 +736,28 @@ test('AI 流式思考与正文分区显示', async () => {
   await flush();
 });
 
+test('AI 流式输出把 JSON 转义显示为真实换行', async () => {
+  const h = await setup({ mode: 'content', view: 'create' });
+  h.el('create-prompt').value = '生成';
+  h.click('create-generate');
+  const stream = h.last('generateTool');
+
+  /* 转义序列可能被拆在两段增量里：先原样显示，补齐后再整体还原 */
+  stream.onDelta('{"indexHtml":"<html>\\', false);
+  assert.equal(h.el('create-stream-text').textContent, '{"indexHtml":"<html>\\');
+  stream.onDelta('n<body>\\n</html>","x":"\\u4e2d\\"y\\""}', false);
+  assert.equal(
+    h.el('create-stream-text').textContent,
+    '{"indexHtml":"<html>\n<body>\n</html>","x":"中"y""}');
+
+  /* 思考分区不做转义还原 */
+  stream.onDelta('第一行\\n第二行', true);
+  assert.equal(h.el('create-stream-reasoning-text').textContent, '第一行\\n第二行');
+
+  stream.reject({ code: 'TEST_ERROR', message: '结束' });
+  await flush();
+});
+
 test('AI 创建新一轮清除旧结果和确认', async () => {
   const h = await setup({ mode: 'content', view: 'create' });
   h.el('create-prompt').value = '增加搜索';

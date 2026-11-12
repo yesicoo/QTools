@@ -757,6 +757,9 @@ internal static class VersionMethods
                 $"版本 {version} 切换后未通过校验：{string.Join("；", reloaded.Errors)}");
         }
 
+        /* 主窗口列表的版本徽标来自 launcherList，切换后立推送刷新，不等用户切回主窗口 */
+        context.Shell?.NotifyLauncherChanged();
+
         return System.Threading.Tasks.Task.FromResult(JsonSerializer.SerializeToElement(
             new OkResult(true), AppJsonContext.Default.OkResult));
     }
@@ -816,6 +819,9 @@ internal static class VersionMethods
         var reloaded = await context.Creator
             .ApplyUpdateAsync(tool, generated, acceptHigh, CancellationToken.None)
             .ConfigureAwait(false);
+
+        /* 应用更新后版本号变化，立即刷新主窗口列表徽标 */
+        context.Shell?.NotifyLauncherChanged();
 
         return JsonSerializer.SerializeToElement(
             new OkResult(true), AppJsonContext.Default.OkResult);

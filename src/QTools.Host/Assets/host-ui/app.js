@@ -869,6 +869,27 @@
   }
 
   /* ================= AI 流式输出预览 ================= */
+  /** AI 原始输出是 JSON 源码，换行/引号/中文都可能是转义序列；
+   *  预览区只做显示层还原（\n → 换行、\uXXXX → 字符），不影响最终解析结果。
+   *  不完整的尾部转义保持原样，下一段增量到达后整体重算。 */
+  function prettyStreamText(raw) {
+    var out = "";
+    for (var i = 0; i < raw.length; i++) {
+      var ch = raw.charAt(i);
+      if (ch !== "\\" || i + 1 >= raw.length) { out += ch; continue; }
+      var next = raw.charAt(i + 1);
+      if (next === "n") { out += "\n"; i += 1; }
+      else if (next === "r") { i += 1; }
+      else if (next === "t") { out += "  "; i += 1; }
+      else if (next === "u" && i + 5 < raw.length && /^[0-9a-fA-F]{4}$/.test(raw.slice(i + 2, i + 6))) {
+        out += String.fromCharCode(parseInt(raw.slice(i + 2, i + 6), 16));
+        i += 5;
+      } else if (next === '"' || next === "\\" || next === "/") { out += next; i += 1; }
+      else { out += ch; }
+    }
+    return out;
+  }
+
   /** 打开流式预览区，返回 { control, onDelta, finish }。
    *  control.requestId 由 bridge.js 同步填入，取消按钮据此调用 manager.cancelRequest。 */
   function beginStream(prefix) {
@@ -877,7 +898,7 @@
     var reasoning = $(prefix + "-stream-reasoning");
     var reasoningText = $(prefix + "-stream-reasoning-text");
     var cancelBtn = $(prefix + "-stream-cancel");
-    var state = { control: {} };
+    var state = { control: {}, rawOutput: "" };
     if (text) { text.textContent = ""; }
     if (reasoningText) { reasoningText.textContent = ""; }
     if (reasoning) { reasoning.hidden = true; }
@@ -903,7 +924,8 @@
         return;
       }
       if (text) {
-        text.textContent += delta;
+        state.rawOutput += delta;
+        text.textContent = prettyStreamText(state.rawOutput);
         text.scrollTop = text.scrollHeight;
       }
     };
