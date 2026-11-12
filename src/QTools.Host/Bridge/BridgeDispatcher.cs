@@ -349,7 +349,7 @@ public sealed class BridgeDispatcher
                 Backup = _backup,
                 GitBackup = _gitBackup,
                 CancellationToken = cts.Token,
-                PushDelta = push is null ? null : delta => push(BuildStreamChunk(requestId, delta)),
+                PushDelta = push is null ? null : (delta, reasoning) => push(BuildStreamChunk(requestId, delta, reasoning)),
                 CancelRequest = CancelPendingRequest,
             };
 
@@ -407,9 +407,9 @@ public sealed class BridgeDispatcher
         return true;
     }
 
-    private static string BuildStreamChunk(string requestId, string delta) =>
+    private static string BuildStreamChunk(string requestId, string delta, bool reasoning) =>
         JsonSerializer.Serialize(
-            new BridgeStreamEnvelope(requestId, new BridgeStreamBody(delta)),
+            new BridgeStreamEnvelope(requestId, new BridgeStreamBody(delta, reasoning)),
             AppJsonContext.Default.BridgeStreamEnvelope);
 
     private static string BuildSuccess(string requestId, JsonElement result)

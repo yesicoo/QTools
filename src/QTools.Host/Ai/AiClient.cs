@@ -23,12 +23,36 @@ public sealed record AiChoice(AiResponseMessage? Message);
 
 public sealed record AiResponseMessage(string? Content);
 
-/// <summary>SSE 流式响应的单个 chunk（OpenAI 兼容：choices[0].delta.content）。</summary>
+/// <summary>SSE 流式响应的单个 chunk（OpenAI 兼容：choices[0].delta.content / reasoning_content）。</summary>
 public sealed record AiStreamChunk(IReadOnlyList<AiStreamChoice>? Choices);
 
 public sealed record AiStreamChoice(AiStreamDelta? Delta);
 
-public sealed record AiStreamDelta(string? Content);
+public sealed record AiStreamDelta(
+    string? Content,
+    [property: JsonPropertyName("reasoning_content")] string? ReasoningContent);
+
+/// <summary>Anthropic 兼容（/anthropic）请求：max_tokens 必填、system 走顶层字段。</summary>
+public sealed record AnthropicChatRequest(
+    string Model,
+    [property: JsonPropertyName("max_tokens")] int MaxTokens,
+    double Temperature,
+    [property: JsonPropertyName("system")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? System,
+    IReadOnlyList<AnthropicMessage> Messages,
+    bool Stream = false);
+
+public sealed record AnthropicMessage(string Role, string Content);
+
+public sealed record AnthropicChatResponse(IReadOnlyList<AnthropicContentBlock>? Content);
+
+public sealed record AnthropicContentBlock(string? Type, string? Text);
+
+/// <summary>Anthropic SSE 事件（content_block_delta 携带 text_delta / thinking_delta）。</summary>
+public sealed record AnthropicStreamEvent(string? Type, AnthropicStreamDelta? Delta);
+
+public sealed record AnthropicStreamDelta(string? Type, string? Text, string? Thinking);
 
 /// <summary>工具创造器使用的生成结果（AI 输出经容错解析后得到）。</summary>
 /// <remarks>
@@ -48,6 +72,8 @@ public sealed class AiClient
 {
     private const string ServiceName = SecretStoreFactory.AiServiceName;
     private const string AccountName = SecretStoreFactory.AiAccountName;
+    private const int AnthropicMaxTokens = 32768;
+    private const string AnthropicVersion = "2023-06-01";
 
     private readonly HttpClient _http;
     private readonly ISecretStore _secrets;
@@ -86,6 +112,11 @@ public sealed class AiClient
             string.IsNullOrWhiteSpace(config.Model))
         {
             throw new BridgeException("AI_NOT_CONFIGURED", "宿主尚未配置 AI 接口（baseUrl / model / API Key）");
+        }
+
+        if (IsAnthropicEndpoint(config.BaseUrl))
+        {
+            return await ChatAnthropicAsync(config, apiKey, messages, temperature, cancellationToken).ConfigureAwait(false);
         }
 
         var temperatureValue = temperature ?? config.Temperature;
@@ -159,7 +190,7 @@ public sealed class AiClient
     public async Task<string> ChatStreamingAsync(
         IReadOnlyList<(string Role, string Content)> messages,
         double? temperature,
-        Action<string> onDelta,
+        Action<string, bool> onDelta,
         CancellationToken cancellationToken)
     {
         var config = _config.Ai;
@@ -169,6 +200,12 @@ public sealed class AiClient
             string.IsNullOrWhiteSpace(config.Model))
         {
             throw new BridgeException("AI_NOT_CONFIGURED", "宿主尚未配置 AI 接口（baseUrl / model / API Key）");
+        }
+
+        if (IsAnthropicEndpoint(config.BaseUrl))
+        {
+            return await ChatAnthropicStreamingAsync(config, apiKey, messages, temperature, onDelta, cancellationToken)
+                .ConfigureAwait(false);
         }
 
         var temperatureValue = temperature ?? config.Temperature;
@@ -210,52 +247,28 @@ public sealed class AiClient
                 var body = await response.Content.ReadAsStringAsync(timeout.Token).ConfigureAwait(false);
                 Log.Info($"AI 请求完成（非流式回退）：HTTP {status}，模型 {config.Model}，响应 {body.Length} 字节");
                 var full = ParseChatContent(body);
-                onDelta(full);
+                onDelta(full, false);
                 return full;
             }
 
             var builder = new StringBuilder();
             using var stream = await response.Content.ReadAsStreamAsync(timeout.Token).ConfigureAwait(false);
             using var reader = new StreamReader(stream, Encoding.UTF8);
-            var dataBuilder = new StringBuilder();
-            string? line;
-            while ((line = await reader.ReadLineAsync(timeout.Token).ConfigureAwait(false)) is not null)
-            {
-                timeout.CancelAfter(TimeSpan.FromSeconds(idleSeconds));
-
-                if (line.Length == 0)
+            await PumpSseAsync(
+                reader,
+                TimeSpan.FromSeconds(idleSeconds),
+                timeout,
+                data =>
                 {
-                    if (dataBuilder.Length > 0)
+                    if (data == "[DONE]")
                     {
-                        var data = dataBuilder.ToString();
-                        dataBuilder.Clear();
-                        if (data == "[DONE]")
-                        {
-                            break;
-                        }
-
-                        AppendChunk(data, builder, onDelta);
+                        return true;
                     }
 
-                    continue;
-                }
-
-                if (line.StartsWith("data:", StringComparison.Ordinal))
-                {
-                    if (dataBuilder.Length > 0)
-                    {
-                        dataBuilder.Append('\n');
-                    }
-
-                    dataBuilder.Append(line[5..].TrimStart());
-                }
-                // event:/id:/retry: 与注释行（keep-alive）忽略
-            }
-
-            if (dataBuilder.Length > 0 && dataBuilder.ToString() != "[DONE]")
-            {
-                AppendChunk(dataBuilder.ToString(), builder, onDelta);
-            }
+                    AppendChunk(data, builder, onDelta);
+                    return false;
+                },
+                timeout.Token).ConfigureAwait(false);
 
             var content = builder.ToString();
             Log.Info($"AI 流式请求完成：HTTP {status}，模型 {config.Model}，共 {content.Length} 字符");
@@ -280,7 +293,7 @@ public sealed class AiClient
         }
     }
 
-    private static void AppendChunk(string data, StringBuilder builder, Action<string> onDelta)
+    private static void AppendChunk(string data, StringBuilder builder, Action<string, bool> onDelta)
     {
         AiStreamChunk? chunk;
         try
@@ -292,14 +305,72 @@ public sealed class AiClient
             return; // 单个坏块不中断整个流
         }
 
-        var delta = chunk?.Choices is { Count: > 0 } ? chunk.Choices[0].Delta?.Content : null;
-        if (string.IsNullOrEmpty(delta))
+        var delta = chunk?.Choices is { Count: > 0 } ? chunk.Choices[0].Delta : null;
+        if (delta is null)
         {
             return;
         }
 
-        builder.Append(delta);
-        onDelta(delta);
+        // thinking 模式下 reasoning_content 先于正文到达：原样推给界面，避免长时间看起来“卡住”
+        if (!string.IsNullOrEmpty(delta.ReasoningContent))
+        {
+            onDelta(delta.ReasoningContent, true);
+        }
+
+        if (string.IsNullOrEmpty(delta.Content))
+        {
+            return;
+        }
+
+        builder.Append(delta.Content);
+        onDelta(delta.Content, false);
+    }
+
+    /// <summary>逐行读取 SSE：空行触发一条 data 回调；回调返回 true 表示终止（[DONE] / message_stop）。</summary>
+    private static async Task PumpSseAsync(
+        StreamReader reader,
+        TimeSpan idleTimeout,
+        CancellationTokenSource timeout,
+        Func<string, bool> onData,
+        CancellationToken cancellationToken)
+    {
+        var dataBuilder = new StringBuilder();
+        string? line;
+        while ((line = await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false)) is not null)
+        {
+            timeout.CancelAfter(idleTimeout);
+
+            if (line.Length == 0)
+            {
+                if (dataBuilder.Length > 0)
+                {
+                    var data = dataBuilder.ToString();
+                    dataBuilder.Clear();
+                    if (onData(data))
+                    {
+                        return;
+                    }
+                }
+
+                continue;
+            }
+
+            if (line.StartsWith("data:", StringComparison.Ordinal))
+            {
+                if (dataBuilder.Length > 0)
+                {
+                    dataBuilder.Append('\n');
+                }
+
+                dataBuilder.Append(line[5..].TrimStart());
+            }
+            // event:/id:/retry: 与注释行（keep-alive）忽略
+        }
+
+        if (dataBuilder.Length > 0)
+        {
+            onData(dataBuilder.ToString());
+        }
     }
 
     private static string ParseChatContent(string body)
@@ -323,15 +394,289 @@ public sealed class AiClient
         return content;
     }
 
+    /// <summary>Anthropic Messages API（/anthropic 端点）：x-api-key 鉴权、max_tokens 必填、system 走顶层。</summary>
+    private async Task<string> ChatAnthropicAsync(
+        Configuration.AiConfigSection config,
+        string apiKey,
+        IReadOnlyList<(string Role, string Content)> messages,
+        double? temperature,
+        CancellationToken cancellationToken)
+    {
+        var (system, anthropicMessages) = SplitAnthropicMessages(messages);
+        var request = new AnthropicChatRequest(
+            config.Model,
+            AnthropicMaxTokens,
+            Math.Clamp(temperature ?? config.Temperature, 0d, 1d),
+            system,
+            anthropicMessages);
+
+        var json = JsonSerializer.Serialize(request, QTools.Host.Serialization.AppJsonContext.Default.AnthropicChatRequest);
+        var url = BuildAnthropicMessagesUrl(config.BaseUrl);
+
+        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, url);
+        httpRequest.Content = new StringContent(json, Encoding.UTF8, "application/json");
+        httpRequest.Headers.Add("x-api-key", apiKey);
+        httpRequest.Headers.Add("anthropic-version", AnthropicVersion);
+
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(Math.Max(1, config.TimeoutSeconds)));
+
+        try
+        {
+            using var response = await _http.SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead, timeout.Token)
+                .ConfigureAwait(false);
+            var status = (int)response.StatusCode;
+            var body = await response.Content.ReadAsStringAsync(timeout.Token).ConfigureAwait(false);
+            Log.Info($"AI 请求完成（Anthropic 兼容）：HTTP {status}，模型 {config.Model}，响应 {body.Length} 字节");
+
+            if (!response.IsSuccessStatusCode)
+            {
+                throw MapHttpError(status);
+            }
+
+            return ParseAnthropicContent(body);
+        }
+        catch (OperationCanceledException) when (timeout.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            throw new BridgeException("AI_TIMEOUT", $"AI 请求超时（{config.TimeoutSeconds}s）");
+        }
+        catch (OperationCanceledException)
+        {
+            throw new BridgeException("AI_TIMEOUT", "AI 请求被取消");
+        }
+        catch (Exception ex) when (ex is HttpRequestException or IOException)
+        {
+            throw new BridgeException("AI_NETWORK_ERROR", "无法连接或读取 AI 服务，请检查接口地址和网络连接");
+        }
+    }
+
+    private async Task<string> ChatAnthropicStreamingAsync(
+        Configuration.AiConfigSection config,
+        string apiKey,
+        IReadOnlyList<(string Role, string Content)> messages,
+        double? temperature,
+        Action<string, bool> onDelta,
+        CancellationToken cancellationToken)
+    {
+        var (system, anthropicMessages) = SplitAnthropicMessages(messages);
+        var request = new AnthropicChatRequest(
+            config.Model,
+            AnthropicMaxTokens,
+            Math.Clamp(temperature ?? config.Temperature, 0d, 1d),
+            system,
+            anthropicMessages,
+            Stream: true);
+
+        var json = JsonSerializer.Serialize(request, QTools.Host.Serialization.AppJsonContext.Default.AnthropicChatRequest);
+        var url = BuildAnthropicMessagesUrl(config.BaseUrl);
+
+        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, url);
+        httpRequest.Content = new StringContent(json, Encoding.UTF8, "application/json");
+        httpRequest.Headers.Add("x-api-key", apiKey);
+        httpRequest.Headers.Add("anthropic-version", AnthropicVersion);
+        httpRequest.Headers.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("text/event-stream"));
+
+        var idleSeconds = Math.Max(1, Math.Max(config.TimeoutSeconds, 60));
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(idleSeconds));
+
+        try
+        {
+            using var response = await _http.SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead, timeout.Token)
+                .ConfigureAwait(false);
+            var status = (int)response.StatusCode;
+
+            if (!response.IsSuccessStatusCode)
+            {
+                var errorBody = await response.Content.ReadAsStringAsync(timeout.Token).ConfigureAwait(false);
+                Log.Info($"AI 流式请求失败（Anthropic 兼容）：HTTP {status}，模型 {config.Model}，响应 {errorBody.Length} 字节");
+                throw MapHttpError(status);
+            }
+
+            var mediaType = response.Content.Headers.ContentType?.MediaType ?? string.Empty;
+            if (!mediaType.Contains("text/event-stream", StringComparison.OrdinalIgnoreCase))
+            {
+                var body = await response.Content.ReadAsStringAsync(timeout.Token).ConfigureAwait(false);
+                Log.Info($"AI 请求完成（Anthropic 非流式回退）：HTTP {status}，模型 {config.Model}，响应 {body.Length} 字节");
+                var full = ParseAnthropicContent(body);
+                onDelta(full, false);
+                return full;
+            }
+
+            var builder = new StringBuilder();
+            using var stream = await response.Content.ReadAsStreamAsync(timeout.Token).ConfigureAwait(false);
+            using var reader = new StreamReader(stream, Encoding.UTF8);
+            await PumpSseAsync(
+                reader,
+                TimeSpan.FromSeconds(idleSeconds),
+                timeout,
+                data =>
+                {
+                    if (data == "[DONE]")
+                    {
+                        return true;
+                    }
+
+                    return AppendAnthropicChunk(data, builder, onDelta);
+                },
+                timeout.Token).ConfigureAwait(false);
+
+            var content = builder.ToString();
+            Log.Info($"AI 流式请求完成（Anthropic 兼容）：HTTP {status}，模型 {config.Model}，共 {content.Length} 字符");
+            if (string.IsNullOrWhiteSpace(content))
+            {
+                throw new BridgeException("AI_INVALID_RESPONSE", "AI 流式响应没有内容");
+            }
+
+            return content;
+        }
+        catch (OperationCanceledException) when (timeout.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            throw new BridgeException("AI_TIMEOUT", $"AI 请求超时（{idleSeconds}s 内未收到数据）");
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw new BridgeException("AI_CANCELLED", "AI 请求已取消");
+        }
+        catch (Exception ex) when (ex is HttpRequestException or IOException)
+        {
+            throw new BridgeException("AI_NETWORK_ERROR", "无法连接或读取 AI 服务，请检查接口地址和网络连接");
+        }
+    }
+
+    private static bool AppendAnthropicChunk(string data, StringBuilder builder, Action<string, bool> onDelta)
+    {
+        AnthropicStreamEvent? evt;
+        try
+        {
+            evt = JsonSerializer.Deserialize(data, QTools.Host.Serialization.AppJsonContext.Default.AnthropicStreamEvent);
+        }
+        catch (JsonException)
+        {
+            return false; // 单个坏块不中断整个流
+        }
+
+        if (evt is null)
+        {
+            return false;
+        }
+
+        if (evt.Type == "error")
+        {
+            throw new BridgeException("AI_UPSTREAM_ERROR", "AI 流式响应返回错误");
+        }
+
+        if (evt.Type == "message_stop")
+        {
+            return true;
+        }
+
+        if (evt.Type != "content_block_delta" || evt.Delta is null)
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrEmpty(evt.Delta.Thinking))
+        {
+            onDelta(evt.Delta.Thinking, true);
+        }
+
+        if (!string.IsNullOrEmpty(evt.Delta.Text))
+        {
+            builder.Append(evt.Delta.Text);
+            onDelta(evt.Delta.Text, false);
+        }
+
+        return false;
+    }
+
+    private static (string? System, IReadOnlyList<AnthropicMessage> Messages) SplitAnthropicMessages(
+        IReadOnlyList<(string Role, string Content)> messages)
+    {
+        var systemParts = new List<string>();
+        var converted = new List<AnthropicMessage>(messages.Count);
+        foreach (var (role, content) in messages)
+        {
+            if (string.Equals(role, "system", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!string.IsNullOrWhiteSpace(content))
+                {
+                    systemParts.Add(content);
+                }
+
+                continue;
+            }
+
+            converted.Add(new AnthropicMessage(role, content));
+        }
+
+        return (systemParts.Count == 0 ? null : string.Join("\n\n", systemParts), converted);
+    }
+
+    private static string ParseAnthropicContent(string body)
+    {
+        AnthropicChatResponse? parsed;
+        try
+        {
+            parsed = JsonSerializer.Deserialize(body, QTools.Host.Serialization.AppJsonContext.Default.AnthropicChatResponse);
+        }
+        catch (JsonException)
+        {
+            throw new BridgeException("AI_INVALID_RESPONSE", "AI 响应不是合法 JSON");
+        }
+
+        var text = parsed?.Content is null
+            ? null
+            : string.Concat(parsed.Content
+                .Where(block => block is not null && block.Type == "text")
+                .Select(block => block.Text));
+
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            throw new BridgeException("AI_INVALID_RESPONSE", "AI 响应缺少文本内容");
+        }
+
+        return text;
+    }
+
+    /// <summary>DeepSeek / Anthropic 官方错误码语义：401 鉴权、402 余额、422 参数、429 限流、5xx 服务端。</summary>
     private static BridgeException MapHttpError(int status)
     {
         return status switch
         {
             401 or 403 => new BridgeException("AI_UNAUTHORIZED", $"AI 服务拒绝访问（HTTP {status}）：请检查 API Key"),
+            402 => new BridgeException("AI_INSUFFICIENT_BALANCE", $"AI 服务账户余额不足（HTTP {status}）：请充值后再试"),
+            404 or 405 => new BridgeException("AI_INVALID_BASE_URL", $"接口地址无法处理该请求（HTTP {status}）：OpenAI 兼容填 https://api.deepseek.com，Anthropic 兼容填 https://api.deepseek.com/anthropic"),
+            422 => new BridgeException("AI_BAD_REQUEST", $"AI 服务拒绝请求参数（HTTP {status}）：请检查模型名称（如 deepseek-flash / deepseek-v4-pro）"),
             429 => new BridgeException("AI_RATE_LIMITED", $"AI 服务限流（HTTP 429）"),
-            >= 500 => new BridgeException("AI_UPSTREAM_ERROR", $"AI 服务内部错误（HTTP {status}）"),
+            529 or >= 500 => new BridgeException("AI_UPSTREAM_ERROR", $"AI 服务内部错误（HTTP {status}）：请稍后重试"),
             _ => new BridgeException("AI_BAD_REQUEST", $"AI 服务拒绝请求（HTTP {status}）：请检查接口地址与请求参数"),
         };
+    }
+
+    /// <summary>是否为 Anthropic 兼容端点（路径含 /anthropic 段）——请求格式与 OpenAI 不同。</summary>
+    public static bool IsAnthropicEndpoint(string baseUrl)
+    {
+        var trimmed = (baseUrl ?? string.Empty).Trim().TrimEnd('/');
+        return trimmed.EndsWith("/anthropic", StringComparison.OrdinalIgnoreCase) ||
+               trimmed.Contains("/anthropic/", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>把 Anthropic 兼容 baseUrl 规整为 /v1/messages 端点（容忍末尾斜杠与已含 /v1）。</summary>
+    public static string BuildAnthropicMessagesUrl(string baseUrl)
+    {
+        var trimmed = (baseUrl ?? string.Empty).Trim().TrimEnd('/');
+        if (trimmed.EndsWith("/v1/messages", StringComparison.OrdinalIgnoreCase))
+        {
+            return trimmed;
+        }
+
+        if (trimmed.EndsWith("/v1", StringComparison.OrdinalIgnoreCase))
+        {
+            return trimmed + "/messages";
+        }
+
+        return trimmed + "/v1/messages";
     }
 
     /// <summary>把用户配置的 baseUrl 规整为 /chat/completions 端点（容忍末尾斜杠与是否已含 /v1）。</summary>

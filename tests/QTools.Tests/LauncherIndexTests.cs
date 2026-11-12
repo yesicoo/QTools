@@ -232,6 +232,34 @@ public sealed class UsageStoreTests : IDisposable
         Assert.Null(store.Get(""));
         Assert.Null(store.Get("zero"));
     }
+
+    [Fact]
+    public void EnsureSeededAddsOnlyMissingEntries()
+    {
+        var store = new UsageStore(_filePath);
+        store.Record("used");
+        store.Record("used");
+
+        store.EnsureSeeded(new[] { "used", "new-a", "new-b", "" });
+
+        Assert.Equal(2, store.Get("used")!.Count);
+        Assert.Equal(1, store.Get("new-a")!.Count);
+        Assert.Equal(1, store.Get("new-b")!.Count);
+        Assert.Equal("", store.Get("new-a")!.LastUsedUtc);
+    }
+
+    [Fact]
+    public void EnsureSeededPersistsAndRecordContinuesCounting()
+    {
+        var store = new UsageStore(_filePath);
+        store.EnsureSeeded(new[] { "a", "b" });
+        store.Record("a");
+
+        var reloaded = new UsageStore(_filePath);
+        Assert.Equal(2, reloaded.Get("a")!.Count);
+        Assert.Equal(1, reloaded.Get("b")!.Count);
+        Assert.Empty(Directory.GetFiles(Path.GetDirectoryName(_filePath)!, "usage.json.tmp-*"));
+    }
 }
 
 /// <summary>统一列表构建：三类来源合并 / 手动项优先去重 / 使用频次排序 / 索引状态。</summary>

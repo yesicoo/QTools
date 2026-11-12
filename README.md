@@ -39,6 +39,7 @@ Windows 下需要 [WebView2 Runtime（Evergreen）](https://developer.microsoft.
 | **在线工具** | 「添加网址」录入 URL 保存（名称 / 描述 / 分类 / 自定义图标与导入工具同一套字段）；点击用独立 WebView 窗口在线打开（不注入宿主桥接，与本地能力完全隔离） |
 
 - **使用频次排序**：用得多的排前面；次数相同按最近使用，没用过的按名称。
+- **首页只显示用过的条目**：小工具、手动添加的程序、在线工具创建时默认计 1 次并直接显示；自动索引的本机程序从 0 次开始、不占首页，但搜索随时能搜到，点开一次即计次并出现在首页。
 - **拼音搜索**：首字母与全拼都行——输入 `wx` / `weixin` 都能搜到「微信」；导入工具与在线工具同样生效（如「图片压缩」→ `tpys` / `tupian` / `tupianyasuo`）。
 - **自适应布局**：主窗口默认是细长条单列列表，拉宽后按宽度自动排成多列网格卡片（每列最小 240px），条目的右键原位菜单保持不变。
 - **窗口尺寸记忆**：手动拖拽调整主窗口大小后，下次启动按上次的尺寸打开（存 `data/config.json` 的 `shell.mainWindowWidth/Height`，越界值自动回退默认 340×720）；工具/AI 创建/导入共用的内容窗口也会记住上次的位置和大小（`shell.contentWindowLeft/Top/Width/Height`），下次打开原位恢复，显示器变动导致位置失效时回退贴主窗口打开。
@@ -52,6 +53,8 @@ Windows 下需要 [WebView2 Runtime（Evergreen）](https://developer.microsoft.
 ## AI 创建工具
 
 主窗口点「AI 创建工具」→ 输入需求（如「做一个录音机，能录音、保存 webm、回放历史」）→ 流式生成 → 审查安全报告 → 保存并打开。
+
+AI 接口自动识别 **OpenAI 兼容**与 **Anthropic 兼容**两种端点：DeepSeek 可填 `https://api.deepseek.com` 或 `https://api.deepseek.com/anthropic`；模型 `deepseek-flash` / `deepseek-v4-pro`。思考型模型的推理过程（`reasoning_content` / `thinking_delta`）会实时显示在生成预览里，不再出现长时间“卡住后突然出结果”。
 
 - 提示词会**自动补全宿主规范**：单文件 HTML（便于导入导出）、中文界面、按需声明权限、优先用 `window.host` 能力，你只需要描述想要什么。
 - 生成内容是**单文件 `index.html`**，允许引用 CDN / 外部资源与联网——单文件的目的是支持导入导出与备份，不是限制不能联网。

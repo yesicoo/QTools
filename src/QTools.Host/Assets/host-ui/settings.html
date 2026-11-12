@@ -40,12 +40,17 @@
       API Key 只保存在本机系统保护存储中（<span id="ai-secret-mode">…</span>），
       工具页面无法获取，只能通过 <code>window.host.ai.chat</code> 间接使用。
     </p>
+    <p class="hint">
+      自动识别 OpenAI 兼容与 Anthropic 兼容端点。DeepSeek 可填 <code>https://api.deepseek.com</code>（OpenAI 兼容）
+      或 <code>https://api.deepseek.com/anthropic</code>（Anthropic 兼容）；模型 <code>deepseek-flash</code> 或
+      <code>deepseek-v4-pro</code>。
+    </p>
     <div class="form">
       <label>Base URL
-        <input id="ai-baseurl" type="url" required placeholder="https://api.deepseek.com/v1" spellcheck="false">
+        <input id="ai-baseurl" type="url" required placeholder="https://api.deepseek.com" spellcheck="false">
       </label>
       <label>模型
-        <input id="ai-model" type="text" required placeholder="deepseek-chat" spellcheck="false">
+        <input id="ai-model" type="text" required placeholder="deepseek-flash" spellcheck="false">
       </label>
       <div class="form-row">
         <label>Temperature

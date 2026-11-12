@@ -231,6 +231,28 @@ test("原生接收器首次注册失败后下一次调用恢复且不重复注�
   assert.equal(page.clock.timers.size, 0);
 });
 
+test("callManagerStream 透传思考标记（reasoning）", async (t) => {
+  const native = createNative();
+  const page = createPage(t, { external: native.external });
+  const deltas = [];
+  const control = {};
+  const state = observe(page.host.callManagerStream(
+    "manager.generateTool", { prompt: "时钟" },
+    (text, reasoning) => deltas.push({ text, reasoning }), control));
+
+  const id = readRequest(native).id;
+  assert.equal(control.requestId, id);
+  native.respond({ id, stream: { delta: "思考内容", reasoning: true } });
+  native.respond({ id, stream: { delta: "正文内容", reasoning: false } });
+  native.respond({ id, result: { ok: true } });
+
+  await expectResolved(state, { ok: true });
+  assert.deepEqual(deltas, [
+    { text: "思考内容", reasoning: true },
+    { text: "正文内容", reasoning: false }
+  ]);
+});
+
 test("external 接收器失败可以降级到 chrome 接收响应", async (t) => {
   const native = createNative({ registrationFailures: Infinity });
   let chromeReceiver;

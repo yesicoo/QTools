@@ -117,10 +117,14 @@ public sealed class BridgeContext
     public System.Threading.CancellationToken CancellationToken { get; init; }
 
     /// <summary>
-    /// 流式增量推送：把一段原始文本作为 {"id","stream":{"delta"}} 信封发给页面。
+    /// 流式增量推送：把一段文本作为 {"id","stream":{"delta","reasoning"}} 信封发给页面；
+    /// reasoning=true 表示模型的思考过程，页面需要与正文分区展示。
     /// 无推送通道（无头/自检）时为 null，调用方应回退到非流式路径。
     /// </summary>
-    public Action<string>? PushDelta { get; init; }
+    public Action<string, bool>? PushDelta { get; init; }
+
+    /// <summary>只要正文的推送通道（Git 等非 AI 流复用，思考标记固定 false）。</summary>
+    public Action<string>? PushOutput => PushDelta is null ? null : text => PushDelta(text, false);
 
     /// <summary>按请求 id 取消一个正在执行的桥接请求（manager.cancelRequest 用）。</summary>
     public Func<string, bool>? CancelRequest { get; init; }
@@ -132,8 +136,8 @@ public sealed record BridgeStreamEnvelope(string Id, BridgeStreamBody Stream);
 /// <summary>宿主主动事件信封（如索引完成 launcher-changed）；页面按 event 字段分流为 host-event。</summary>
 public sealed record BridgeEventEnvelope(string Id, string Event);
 
-/// <summary>流式增量载荷。</summary>
-public sealed record BridgeStreamBody(string Delta);
+/// <summary>流式增量载荷；Reasoning=true 表示思考过程，需与正文分开显示。</summary>
+public sealed record BridgeStreamBody(string Delta, bool Reasoning = false);
 
 /// <summary>桥接响应信封（错误形态；成功形态由分发器用 Utf8JsonWriter 直写以承载任意结果）。</summary>
 public sealed record BridgeErrorResponse(string Id, BridgeError Error);

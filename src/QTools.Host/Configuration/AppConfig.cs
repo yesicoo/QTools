@@ -15,8 +15,8 @@ public sealed record AppConfig(
 {
     public static AppConfig Default { get; } = new(
         new AiConfigSection(
-            BaseUrl: "https://api.deepseek.com/v1",
-            Model: "deepseek-chat",
+            BaseUrl: "https://api.deepseek.com",
+            Model: "deepseek-flash",
             Temperature: 0.7,
             TimeoutSeconds: 60),
         new ServerConfigSection(

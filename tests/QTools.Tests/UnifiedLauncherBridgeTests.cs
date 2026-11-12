@@ -116,7 +116,7 @@ public sealed class UnifiedLauncherBridgeTests : IDisposable
         Assert.True(items[0].GetProperty("targetExists").GetBoolean());
         Assert.Equal(_indexTarget, items[0].GetProperty("target").GetString());
         Assert.Equal("app", items[1].GetProperty("kind").GetString());
-        Assert.Equal(0, items[1].GetProperty("useCount").GetInt32());
+        Assert.Equal(1, items[1].GetProperty("useCount").GetInt32());
         Assert.Equal(manualTarget, items[1].GetProperty("target").GetString());
 
         var index = result.GetProperty("index");

@@ -98,9 +98,14 @@
 
       <div id="create-stream" class="stream-box" hidden>
         <div class="stream-head">
-          <span>AI 实时输出（原始内容）</span>
+          <span>AI 实时输出（思考过程与正文分区）</span>
           <button id="create-stream-cancel" class="btn ghost sm danger" type="button">取消生成</button>
         </div>
+        <div id="create-stream-reasoning" class="stream-reasoning" hidden>
+          <div class="stream-reasoning-head">思考过程</div>
+          <pre id="create-stream-reasoning-text" class="stream-reasoning-text"></pre>
+        </div>
+        <div class="stream-output-head">输出内容</div>
         <pre id="create-stream-text" class="stream-text"></pre>
       </div>
 
@@ -152,9 +157,14 @@
 
         <div id="update-stream" class="stream-box" hidden>
           <div class="stream-head">
-            <span>AI 实时输出（原始内容）</span>
+            <span>AI 实时输出（思考过程与正文分区）</span>
             <button id="update-stream-cancel" class="btn ghost sm danger" type="button">取消生成</button>
           </div>
+          <div id="update-stream-reasoning" class="stream-reasoning" hidden>
+            <div class="stream-reasoning-head">思考过程</div>
+            <pre id="update-stream-reasoning-text" class="stream-reasoning-text"></pre>
+          </div>
+          <div class="stream-output-head">输出内容</div>
           <pre id="update-stream-text" class="stream-text"></pre>
         </div>
 

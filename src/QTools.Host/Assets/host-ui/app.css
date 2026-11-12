@@ -490,6 +490,21 @@ kbd {
   font-family: Consolas, "Cascadia Mono", monospace; font-size: 11.5px; line-height: 1.55;
   color: var(--text);
 }
+/* 思考过程单独分区：低对比度、限高滚动，避免与正文混在一起 */
+.stream-reasoning {
+  border-bottom: 1px dashed var(--border);
+  background: rgba(127, 127, 127, 0.06);
+}
+.stream-reasoning-head,
+.stream-output-head {
+  padding: 7px 12px 0; font-size: 11px; color: var(--muted); letter-spacing: 0.03em;
+}
+.stream-reasoning-text {
+  margin: 0; padding: 5px 12px 9px; max-height: 132px; overflow: auto;
+  white-space: pre-wrap; word-break: break-all;
+  font-family: Consolas, "Cascadia Mono", monospace; font-size: 11px; line-height: 1.5;
+  color: var(--muted);
+}
 
 /* 备份列表复用 ul.versions 样式；长文件名换行 */
 ul.versions .v-num { word-break: break-all; }

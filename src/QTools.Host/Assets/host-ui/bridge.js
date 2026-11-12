@@ -163,11 +163,11 @@
 
     var entry = pending[message.id];
     if (entry) {
-      /* 流式增量信封 {"id","stream":{"delta"}}：与最终响应共用 id，
-         命中 onDelta 时只投递增量、不结束 Promise */
+      /* 流式增量信封 {"id","stream":{"delta","reasoning"}}：与最终响应共用 id，
+         命中 onDelta 时只投递增量、不结束 Promise；reasoning=true 表示思考过程 */
       if (message.stream && typeof message.stream.delta === "string") {
         if (entry.onDelta) {
-          try { entry.onDelta(message.stream.delta); } catch (error) { }
+          try { entry.onDelta(message.stream.delta, message.stream.reasoning === true); } catch (error) { }
         }
         return;
       }

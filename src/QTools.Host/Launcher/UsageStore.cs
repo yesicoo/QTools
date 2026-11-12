@@ -48,36 +48,67 @@ public sealed class UsageStore
         {
             var count = _entries.TryGetValue(id, out var existing) ? existing.Count + 1 : 1;
             _entries[id] = new UsageEntry(id, count, DateTimeOffset.UtcNow.ToString("o"));
+            Persist();
+        }
+    }
 
+    /// <summary>
+    /// 为新建/导入/添加的条目补一条使用记录（计数 1，最近使用留空）。
+    /// 首页只显示使用过的条目，这些条目创建后应立即可见；已有记录不覆盖。
+    /// </summary>
+    public void EnsureSeeded(IEnumerable<string> ids)
+    {
+        var added = false;
+        lock (_gate)
+        {
+            foreach (var id in ids)
+            {
+                if (string.IsNullOrWhiteSpace(id) || _entries.ContainsKey(id))
+                {
+                    continue;
+                }
+
+                _entries[id] = new UsageEntry(id, 1, "");
+                added = true;
+            }
+
+            if (added)
+            {
+                Persist();
+            }
+        }
+    }
+
+    private void Persist()
+    {
+        try
+        {
+            var directory = Path.GetDirectoryName(_filePath);
+            if (!string.IsNullOrEmpty(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+
+            var file = new UsageFile(CurrentSchemaVersion, _entries.Values.ToArray());
+            var tempPath = _filePath + ".tmp-" + Path.GetRandomFileName();
             try
             {
-                var directory = Path.GetDirectoryName(_filePath);
-                if (!string.IsNullOrEmpty(directory))
-                {
-                    Directory.CreateDirectory(directory);
-                }
-
-                var file = new UsageFile(CurrentSchemaVersion, _entries.Values.ToArray());
-                var tempPath = _filePath + ".tmp-" + Path.GetRandomFileName();
-                try
-                {
-                    File.WriteAllText(tempPath, JsonSerializer.Serialize(file, AppJsonContext.Default.UsageFile));
-                    File.Move(tempPath, _filePath, overwrite: true);
-                }
-                finally
-                {
-                    if (File.Exists(tempPath))
-                    {
-                        try { File.Delete(tempPath); }
-                        catch (IOException) { /* 残留不影响正确性 */ }
-                    }
-                }
+                File.WriteAllText(tempPath, JsonSerializer.Serialize(file, AppJsonContext.Default.UsageFile));
+                File.Move(tempPath, _filePath, overwrite: true);
             }
-            catch (Exception ex)
+            finally
             {
-                // 持久化失败不阻断启动：内存计数仍在，下次记录会再尝试写
-                Log.Warn($"保存使用频次失败：{ex.Message}");
+                if (File.Exists(tempPath))
+                {
+                    try { File.Delete(tempPath); }
+                    catch (IOException) { /* 残留不影响正确性 */ }
+                }
             }
+        }
+        catch (Exception ex)
+        {
+            // 持久化失败不阻断启动：内存计数仍在，下次记录会再尝试写
+            Log.Warn($"保存使用频次失败：{ex.Message}");
         }
     }
 

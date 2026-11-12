@@ -15,6 +15,8 @@ namespace QTools.Tests;
 public sealed class AiClientTests
 {
     [Theory]
+    [InlineData("https://api.deepseek.com", "https://api.deepseek.com/chat/completions")]
+    [InlineData("https://api.deepseek.com/", "https://api.deepseek.com/chat/completions")]
     [InlineData("https://api.deepseek.com/v1", "https://api.deepseek.com/v1/chat/completions")]
     [InlineData("https://api.deepseek.com/v1/", "https://api.deepseek.com/v1/chat/completions")]
     [InlineData("https://api.openai.com/v1/", "https://api.openai.com/v1/chat/completions")]
@@ -24,6 +26,140 @@ public sealed class AiClientTests
     public void BuildChatCompletionsUrlNormalizes(string input, string expected)
     {
         Assert.Equal(expected, AiClient.BuildChatCompletionsUrl(input));
+    }
+
+    [Theory]
+    [InlineData("https://api.deepseek.com/anthropic", true)]
+    [InlineData("https://api.deepseek.com/anthropic/", true)]
+    [InlineData("https://api.deepseek.com/anthropic/v1", true)]
+    [InlineData("https://api.deepseek.com/anthropic/v1/messages", true)]
+    [InlineData(" https://api.deepseek.com/Anthropic ", true)]
+    [InlineData("https://api.deepseek.com", false)]
+    [InlineData("https://api.deepseek.com/v1", false)]
+    [InlineData("", false)]
+    public void DetectsAnthropicEndpoint(string input, bool expected)
+    {
+        Assert.Equal(expected, AiClient.IsAnthropicEndpoint(input));
+    }
+
+    [Theory]
+    [InlineData("https://api.deepseek.com/anthropic", "https://api.deepseek.com/anthropic/v1/messages")]
+    [InlineData("https://api.deepseek.com/anthropic/", "https://api.deepseek.com/anthropic/v1/messages")]
+    [InlineData("https://api.deepseek.com/anthropic/v1", "https://api.deepseek.com/anthropic/v1/messages")]
+    [InlineData("https://api.deepseek.com/anthropic/v1/messages", "https://api.deepseek.com/anthropic/v1/messages")]
+    public void BuildAnthropicMessagesUrlNormalizes(string input, string expected)
+    {
+        Assert.Equal(expected, AiClient.BuildAnthropicMessagesUrl(input));
+    }
+
+    [Fact]
+    public async Task AnthropicEndpointUsesMessagesApi()
+    {
+        string? url = null;
+        string? apiKey = null;
+        string? version = null;
+        string? authorization = null;
+        string? rawBody = null;
+        using var handler = new AiTestHandler(async (request, _) =>
+        {
+            url = request.RequestUri!.ToString();
+            apiKey = request.Headers.TryGetValues("x-api-key", out var keys) ? keys.FirstOrDefault() : null;
+            version = request.Headers.TryGetValues("anthropic-version", out var versions) ? versions.FirstOrDefault() : null;
+            authorization = request.Headers.Authorization?.ToString();
+            rawBody = await request.Content!.ReadAsStringAsync();
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """{"content":[{"type":"text","text":"完成"}]}""", Encoding.UTF8, "application/json"),
+            };
+        });
+        using var http = new HttpClient(handler);
+        var config = AppConfig.Default with
+        {
+            Ai = AppConfig.Default.Ai with { BaseUrl = "https://api.deepseek.com/anthropic" },
+        };
+        var client = new AiClient(http, new AiTestSecrets(), config);
+
+        Assert.Equal("完成", await client.ChatAsync([("system", "规则"), ("user", "测试")], null, CancellationToken.None));
+
+        Assert.Equal("https://api.deepseek.com/anthropic/v1/messages", url);
+        Assert.Equal(AiTestSecrets.TestKey, apiKey);
+        Assert.Equal("2023-06-01", version);
+        Assert.Null(authorization);
+
+        using var body = JsonDocument.Parse(rawBody!);
+        Assert.Equal(32768, body.RootElement.GetProperty("max_tokens").GetInt32());
+        Assert.Equal("规则", body.RootElement.GetProperty("system").GetString());
+        var messageRoles = body.RootElement.GetProperty("messages").EnumerateArray()
+            .Select(m => m.GetProperty("role").GetString()).ToArray();
+        Assert.Equal(new[] { "user" }, messageRoles);
+    }
+
+    [Fact]
+    public async Task OpenAiStreamingForwardsReasoningBeforeContent()
+    {
+        var sse = string.Join("\n", new[]
+        {
+            """data: {"choices":[{"delta":{"reasoning_content":"先想一下"}}]}""",
+            "",
+            """data: {"choices":[{"delta":{"content":"答案"}}]}""",
+            "",
+            "data: [DONE]",
+            "",
+        });
+        using var handler = new AiTestHandler((_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
+        }));
+        using var http = new HttpClient(handler);
+        var client = new AiClient(http, new AiTestSecrets(), AppConfig.Default);
+        var deltas = new List<(string Text, bool Reasoning)>();
+
+        var content = await client.ChatStreamingAsync(
+            [("user", "测试")], null, (text, reasoning) => deltas.Add((text, reasoning)), CancellationToken.None);
+
+        Assert.Equal("答案", content);
+        Assert.Equal(new[] { ("先想一下", true), ("答案", false) }, deltas);
+    }
+
+    [Fact]
+    public async Task AnthropicStreamingForwardsThinkingAndText()
+    {
+        var sse = string.Join("\n", new[]
+        {
+            "event: content_block_delta",
+            """data: {"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"想"}}""",
+            "",
+            "event: content_block_delta",
+            """data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"答"}}""",
+            "",
+            "event: message_stop",
+            """data: {"type":"message_stop"}""",
+            "",
+        });
+        string? url = null;
+        using var handler = new AiTestHandler((request, _) =>
+        {
+            url = request.RequestUri!.ToString();
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(sse, Encoding.UTF8, "text/event-stream"),
+            });
+        });
+        using var http = new HttpClient(handler);
+        var config = AppConfig.Default with
+        {
+            Ai = AppConfig.Default.Ai with { BaseUrl = "https://api.deepseek.com/anthropic" },
+        };
+        var client = new AiClient(http, new AiTestSecrets(), config);
+        var deltas = new List<(string Text, bool Reasoning)>();
+
+        var content = await client.ChatStreamingAsync(
+            [("user", "测试")], null, (text, reasoning) => deltas.Add((text, reasoning)), CancellationToken.None);
+
+        Assert.Equal("https://api.deepseek.com/anthropic/v1/messages", url);
+        Assert.Equal("答", content);
+        Assert.Equal(new[] { ("想", true), ("答", false) }, deltas);
     }
 
     [Fact]
@@ -181,9 +317,14 @@ public sealed class AiClientTests
     [Theory]
     [InlineData(400, "AI_BAD_REQUEST")]
     [InlineData(401, "AI_UNAUTHORIZED")]
+    [InlineData(402, "AI_INSUFFICIENT_BALANCE")]
     [InlineData(403, "AI_UNAUTHORIZED")]
+    [InlineData(404, "AI_INVALID_BASE_URL")]
+    [InlineData(422, "AI_BAD_REQUEST")]
     [InlineData(429, "AI_RATE_LIMITED")]
     [InlineData(500, "AI_UPSTREAM_ERROR")]
+    [InlineData(550, "AI_UPSTREAM_ERROR")]
+    [InlineData(503, "AI_UPSTREAM_ERROR")]
     public async Task HttpErrorsKeepCodesWithoutExposingKeys(int status, string code)
     {
         using var handler = new AiTestHandler((_, _) => Task.FromResult(new HttpResponseMessage((HttpStatusCode)status)
@@ -492,8 +633,8 @@ public sealed class ConfigStoreTests : IDisposable
     public void MissingFileYieldsDefaultsAndCreatesFile()
     {
         var config = ConfigStore.Load(ConfigPath);
-        Assert.Equal("https://api.deepseek.com/v1", config.Ai.BaseUrl);
-        Assert.Equal("deepseek-chat", config.Ai.Model);
+        Assert.Equal("https://api.deepseek.com", config.Ai.BaseUrl);
+        Assert.Equal("deepseek-flash", config.Ai.Model);
         Assert.True(File.Exists(ConfigPath));
     }
 
@@ -520,7 +661,7 @@ public sealed class ConfigStoreTests : IDisposable
         File.WriteAllText(ConfigPath, "{ not json");
         var config = ConfigStore.Load(ConfigPath);
 
-        Assert.Equal("deepseek-chat", config.Ai.Model);
+        Assert.Equal("deepseek-flash", config.Ai.Model);
         Assert.True(Directory.GetFiles(_directory, "config.json.corrupt-*").Length > 0);
     }
 
@@ -530,8 +671,8 @@ public sealed class ConfigStoreTests : IDisposable
         File.WriteAllText(ConfigPath, "{\"ai\":{\"baseUrl\":\"\",\"model\":\"\",\"temperature\":99,\"timeoutSeconds\":-5}}");
         var config = ConfigStore.Load(ConfigPath);
 
-        Assert.Equal("https://api.deepseek.com/v1", config.Ai.BaseUrl);
-        Assert.Equal("deepseek-chat", config.Ai.Model);
+        Assert.Equal("https://api.deepseek.com", config.Ai.BaseUrl);
+        Assert.Equal("deepseek-flash", config.Ai.Model);
         Assert.Equal(0.7d, config.Ai.Temperature);
         Assert.Equal(60, config.Ai.TimeoutSeconds);
     }

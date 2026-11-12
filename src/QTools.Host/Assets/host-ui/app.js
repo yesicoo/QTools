@@ -174,11 +174,18 @@
 
     allItems.forEach(function (item) {
       if (!matchesSearch(item.searchKey || (item.name + " " + item.id))) { return; }
+      /* 首页只显示用过的条目（索引程序默认 0 次）；搜索时不限，点开即计次并回到首页 */
+      if (!searchTerm && !(item.useCount > 0)) { return; }
       total += 1;
       ul.appendChild(buildNavItem(item));
     });
 
-    if (empty) { empty.hidden = total !== 0; }
+    if (empty) {
+      empty.hidden = total !== 0;
+      if (total === 0) {
+        empty.textContent = searchTerm ? "没有匹配的条目" : "还没有使用记录，搜索可直接打开全部条目";
+      }
+    }
 
     /* 当前内嵌工具仍存在时保持高亮 */
     markActive();
@@ -867,9 +874,13 @@
   function beginStream(prefix) {
     var box = $(prefix + "-stream");
     var text = $(prefix + "-stream-text");
+    var reasoning = $(prefix + "-stream-reasoning");
+    var reasoningText = $(prefix + "-stream-reasoning-text");
     var cancelBtn = $(prefix + "-stream-cancel");
     var state = { control: {} };
     if (text) { text.textContent = ""; }
+    if (reasoningText) { reasoningText.textContent = ""; }
+    if (reasoning) { reasoning.hidden = true; }
     if (box) { box.hidden = false; }
     if (cancelBtn) {
       cancelBtn.hidden = false;
@@ -882,10 +893,19 @@
         host.cancelRequest(state.control.requestId).catch(function () { /* 取消失败时原请求继续 */ });
       };
     }
-    state.onDelta = function (delta) {
-      if (!text) { return; }
-      text.textContent += delta;
-      text.scrollTop = text.scrollHeight;
+    state.onDelta = function (delta, isReasoning) {
+      if (isReasoning) {
+        if (reasoning) { reasoning.hidden = false; }
+        if (reasoningText) {
+          reasoningText.textContent += delta;
+          reasoningText.scrollTop = reasoningText.scrollHeight;
+        }
+        return;
+      }
+      if (text) {
+        text.textContent += delta;
+        text.scrollTop = text.scrollHeight;
+      }
     };
     /** keepVisible=true 时保留已输出的内容（失败/取消后供查看），仅收起取消按钮。 */
     state.finish = function (keepVisible) {

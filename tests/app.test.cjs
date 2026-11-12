@@ -15,13 +15,13 @@ const badgeOf = node => node.children.find(c => c.hasClass('nav-badge'));
 const tools = ['a', 'b'].map(id => ({ id, name: `工具${id}`, version: '1.2.3', isValid: true }));
 const item = (over = {}) => ({
   id: 'x', kind: 'program', name: '程序', version: null, iconUrl: null, searchKey: '',
-  isValid: true, targetExists: true, useCount: 0, category: null, glyph: null, ...over
+  isValid: true, targetExists: true, useCount: 1, category: null, glyph: null, ...over
 });
 const items = [
   item({ id: 'a', kind: 'tool', name: '工具a', version: '1.2.3', searchKey: '工具a a', useCount: 5 }),
   item({ id: 'editor', kind: 'app', name: '编辑器', searchKey: '编辑器 editor', useCount: 3, category: '开发', glyph: '</>' }),
   item({ id: 'idx-x', name: '索引程序', searchKey: '索引程序', useCount: 1, iconUrl: '/__host__/app-icon/idx-x' }),
-  item({ id: 'gone', name: '已卸载', searchKey: '已卸载', targetExists: false })
+  item({ id: 'gone', name: '已卸载', searchKey: '已卸载', useCount: 0, targetExists: false })
 ];
 const indexInfo = { indexing: false, lastIndexedUtc: '2026-01-01T00:00:00Z', programCount: 2 };
 const generated = (id = 'a', version = '1.2.4') => ({
@@ -162,12 +162,34 @@ async function setup(options = {}) {
 test('主窗口渲染统一列表（小工具+本机程序混排）并显示索引状态', async () => {
   const h = await setup();
   const keys = h.el('nav-list').children.map(li => li.children[0].dataset.key);
-  assert.deepEqual(keys, ['tool:a', 'app:editor', 'program:idx-x', 'program:gone']);
+  assert.deepEqual(keys, ['tool:a', 'app:editor', 'program:idx-x']);
   assert.equal(h.el('index-status').textContent, '已索引 2 个本机程序');
   assert.equal(h.el('side-empty').hidden, true);
-  assert.ok(h.navItem('program:gone').hasClass('broken'));
   assert.equal(badgeOf(h.navItem('tool:a')).textContent, 'v1.2.3');
   assert.equal(badgeOf(h.navItem('app:editor')).textContent, '开发');
+});
+
+test('首页隐藏零使用条目，搜索仍可找到', async () => {
+  const h = await setup();
+  const keys = () => h.el('nav-list').children.map(li => li.children[0].dataset.key);
+  assert.deepEqual(keys(), ['tool:a', 'app:editor', 'program:idx-x']);
+
+  const search = h.el('search');
+  search.value = '已卸载';
+  search.fire('input');
+  assert.deepEqual(keys(), ['program:gone'], '搜索时零使用条目也要出现');
+  assert.ok(h.navItem('program:gone').hasClass('broken'));
+
+  search.value = '';
+  search.fire('input');
+  assert.deepEqual(keys(), ['tool:a', 'app:editor', 'program:idx-x'], '清空搜索后恢复首页过滤');
+});
+
+test('首页全部为未使用条目时显示搜索引导', async () => {
+  const h = await setup({ list: [item({ id: 'p', name: '程序p', searchKey: '程序p', useCount: 0 })] });
+  assert.equal(h.el('nav-list').children.length, 0);
+  assert.equal(h.el('side-empty').hidden, false);
+  assert.match(h.el('side-empty').textContent, /搜索/);
 });
 
 test('索引中显示进度文案，空索引显示提示', async () => {
@@ -202,6 +224,9 @@ test('点击本机程序直接启动并刷新排序', async () => {
 
 test('目标不存在的程序点击只提示不启动', async () => {
   const h = await setup();
+  const search = h.el('search');
+  search.value = '已卸载';
+  search.fire('input');
   h.navItem('program:gone').click();
   assert.equal(h.requests('launchApp').length, 0);
   assert.match(h.el('toast').className, /\berr\b/);
@@ -689,6 +714,26 @@ test('AI 创建流式输出可取消，取消后不报错', async () => {
   assert.equal(h.el('create-status').textContent, '已取消生成');
   assert.equal(h.el('create-generate').disabled, false);
   assert.equal(h.el('create-result').hidden, true);
+});
+
+test('AI 流式思考与正文分区显示', async () => {
+  const h = await setup({ mode: 'content', view: 'create' });
+  h.el('create-prompt').value = '做一个待办清单';
+  h.click('create-generate');
+  const stream = h.last('generateTool');
+  assert.equal(h.el('create-stream-reasoning').hidden, true, '没有思考时不显示分区');
+
+  stream.onDelta('先分析需求', true);
+  assert.equal(h.el('create-stream-reasoning').hidden, false);
+  assert.equal(h.el('create-stream-reasoning-text').textContent, '先分析需求');
+  assert.equal(h.el('create-stream-text').textContent, '', '思考内容不能混进正文');
+
+  stream.onDelta('正式输出', false);
+  assert.equal(h.el('create-stream-reasoning-text').textContent, '先分析需求');
+  assert.equal(h.el('create-stream-text').textContent, '正式输出');
+
+  stream.reject({ code: 'TEST_ERROR', message: '结束' });
+  await flush();
 });
 
 test('AI 创建新一轮清除旧结果和确认', async () => {

@@ -108,7 +108,7 @@ public sealed class ToolCreator
         string instruction,
         VersionBump bump,
         System.Threading.CancellationToken cancellationToken,
-        Action<string>? onRawDelta = null)
+        Action<string, bool>? onRawDelta = null)
     {
         if (string.IsNullOrWhiteSpace(instruction))
         {
@@ -249,7 +249,7 @@ public sealed class ToolCreator
         2. 允许引用 CDN 或外部资源（脚本、样式、字体、图片），允许 fetch / XMLHttpRequest / WebSocket 访问外部接口；请求失败时要有降级提示，不要让页面卡死或白屏。
         3. 本地数据持久化用 window.host.storage，二进制文件用 window.host.files，需要 AI 能力时优先用 window.host.ai（Key 由宿主保管，页面拿不到）；禁止在代码里硬编码任何 API Key 或令牌。
         4. 界面文案用简体中文，图标用内联 SVG 或字符；禁止 eval / new Function / 动态 import。
-        5. 布局自适应 manifest.window 声明的尺寸并随窗口缩放；尺寸按工具形态选（默认 520×720、resizable=true）。
+        5. 布局自适应 manifest.window 声明的尺寸并随窗口缩放；window.width/height 必须是 320~3840 的整数（常用 520×720、resizable=true）。
         6. permissions 按实际用量最小化声明；allowEval 固定 false、csp 固定 null。
         7. 交互完整：输入校验、空态、成功/失败反馈都要有，错误不静默。
 
@@ -260,7 +260,7 @@ public sealed class ToolCreator
     public async System.Threading.Tasks.Task<GeneratedToolResult> GenerateAsync(
         string prompt,
         System.Threading.CancellationToken cancellationToken,
-        Action<string>? onRawDelta = null)
+        Action<string, bool>? onRawDelta = null)
     {
         if (string.IsNullOrWhiteSpace(prompt))
         {
@@ -371,7 +371,7 @@ public sealed class ToolCreator
         LoadedTool tool,
         string errorDescription,
         System.Threading.CancellationToken cancellationToken,
-        Action<string>? onRawDelta = null)
+        Action<string, bool>? onRawDelta = null)
     {
         if (string.IsNullOrWhiteSpace(errorDescription))
         {

@@ -38,7 +38,7 @@
 # 构建（Debug，够日常开发）
 dotnet build
 
-# 单元测试（当前基线 412 个）
+# 单元测试（当前基线 436 个）
 dotnet test
 
 # 开发运行（会开 GUI 窗口）
@@ -187,7 +187,7 @@ tests/QTools.Tests/         22 个测试文件，纯单元 + 内存级集成
 
 ### 7.10 流式推送信封与请求同 id，取消走 `manager.cancelRequest`
 
-流式方法（AI 生成/更新、gitPush/gitRestore）的增量信封是 `{"id":<请求id>,"stream":{"delta":...}}`，与最终结果共用 id；`bridge.js` 的 `callManagerStream` 按 id 分流。分发器为每个请求挂 CTS，`manager.cancelRequest` 按 id 取消；用户取消在 AI 链路映射 `AI_CANCELLED`、在分发器兜底 `REQUEST_CANCELLED`，前端据此显示「已取消」而非报错。改传输层时不要破坏「同 id 分流」与「取消不泄露为 INTERNAL_ERROR」。
+流式方法（AI 生成/更新、gitPush/gitRestore）的增量信封是 `{"id":<请求id>,"stream":{"delta":...,"reasoning":bool}}`，与最终结果共用 id；`reasoning=true` 表示模型思考过程，`app.js` 的 `beginStream` 必须把它放进「思考过程」分区、正文放进「输出内容」分区，不要混在同一个 `<pre>` 里。`bridge.js` 的 `callManagerStream` 按 id 分流。分发器为每个请求挂 CTS，`manager.cancelRequest` 按 id 取消；用户取消在 AI 链路映射 `AI_CANCELLED`、在分发器兜底 `REQUEST_CANCELLED`，前端据此显示「已取消」而非报错。改传输层时不要破坏「同 id 分流」与「取消不泄露为 INTERNAL_ERROR」。
 
 ### 7.11 Git 远程恢复必须先 `ls-remote --heads` 再 `clone --branch`
 
@@ -253,6 +253,20 @@ Windows 下主窗口 `Closing` 会先取消再收起到托盘（`Shell/TrayIcon.
 
 内容窗口（`OpenContentAsync`）另外记住 **位置（物理像素）+ 尺寸（DIP）**：`LocationChanged` / `SizeChanged` 防抖 500ms、关闭窗口时立即写入 `shell.contentWindowLeft/Top/Width/Height`；恢复时 `ContentWindowBounds.ResolveSize` 校验尺寸（560×420 ～ 8000×6000，默认 920×680），`ResolveContentWindowOrigin` 用 `MonitorFromPoint(MONITOR_DEFAULTTONULL)` 探测保存点是否仍在任一显示器上——失效则回退 `WindowDock` 贴主窗口。位置用物理像素是因为 `MoveTo` 按物理像素定位（见 7.16 DPI 坑），尺寸用 DIP 是因为 `SetSize` 按窗口 DPI 放大；保存几何用 Win32 `GetWindowRect` + 显示器 DPI 折算，不依赖 Photino 的 `Left/Top` 属性单位。**约束**：最大化/最小化/全屏状态不落盘；复用已打开的内容窗口时不要再 `DockContentToMain`（否则用户拖好的位置每次打开工具都会被重置）；所有 `Persist*` 必须「Load → with 更新 → Save」，不要整份覆盖配置。
 
+### 7.18 AI 自动识别 OpenAI / Anthropic 两种兼容端点，思考内容要实时透传
+
+DeepSeek 官方文档（2026-11）提供两个入口：OpenAI 兼容 `https://api.deepseek.com` + `POST /chat/completions`，以及 Anthropic 兼容 `https://api.deepseek.com/anthropic` + `POST /v1/messages`；模型都是 `deepseek-flash` / `deepseek-v4-pro`。历史 bug：把 `/anthropic` 地址交给 OpenAI 客户端请求会得到非标准 **HTTP 550**，页面只显示「AI 服务内部错误」。
+
+**约束**：`AiClient.IsAnthropicEndpoint` 根据路径段 `/anthropic` 自动分流；Anthropic 分支必须用 `x-api-key` + `anthropic-version: 2023-06-01`、`max_tokens`（32768；8192 会截断长工具输出）、system 消息提升为顶层 `system` 字段、文本从 `content[].text` 读取、流式解析 `content_block_delta` 的 `text_delta` / `thinking_delta`；OpenAI 分支从 `choices[0].delta.content` 读正文、`reasoning_content`（snake_case，必须显式 `JsonPropertyName`）读思考过程。两条分支的思考增量都通过 `onDelta(text, isReasoning: true)` 实时推给界面，正文用 false；桥接信封带 `reasoning` 标记，前端分区展示。避免长时间“无输出像卡死”，也不要把思考和正文混在一起。`MapHttpError` 按官方错误码映射（402 余额不足、422 参数错误、404/405 端点不符、429 限流、5xx/529 服务端）。默认配置固定 `BaseUrl=https://api.deepseek.com` + `Model=deepseek-flash`，不要改回 `deepseek-chat`（已不在官方模型列表）。回归测试见 `AiAndConfigTests`（端点识别、URL 规整、Anthropic 请求头/字段、双协议流式思考透传、错误码）。
+
+### 7.19 首页只显示使用过的条目，搜索不受限
+
+首页列表不再铺满几百个索引程序：`app.js` 的 `renderNav` 在**没有搜索词**时跳过 `useCount <= 0` 的条目，有搜索词时展示全部命中（含 0 次），点开一次由各打开链路 `UsageStore.Record` 计次，刷新后回到首页。
+
+**计数来源**：小工具（AI 创建/导入/示例）、手动启动项、在线工具在创建时与启动时由 `UsageStore.EnsureSeeded` 播种 1 次（`LastUsedUtc` 留空，不伪造最近使用）；索引的本机程序**不播种**，保持 0 次直到用户实际打开。`LocalServer.Start` 会对现有 tools/apps/webtools 做一次幂等补齐（只补缺失记录，不覆盖已有次数），所以升级后已有条目也直接可见。
+
+**约束**：不要把过滤写进后端 `LauncherListBuilder`（搜索需要完整列表）；不要在 `Record` 里顺带播种（会污染真实使用时间）；播种必须走 `EnsureSeeded`（不覆盖、`LastUsedUtc=""`）。回归测试见 `UsageStoreTests`（播种/幂等/持久化）、`UnifiedLauncherBridgeTests`（addApp 计 1 次）、`tests/app.test.cjs`（首页隐藏 0 次、搜索可见、清空搜索恢复）。
+
 ---
 
 ## 8. 平台事实（不要假装全平台都是 WebKit）
@@ -295,8 +309,8 @@ Windows 下主窗口 `Closing` 会先取消再收起到托盘（`Shell/TrayIcon.
 5. **PowerShell 里 `"$(id)"` 会被当子表达式求值**。生成含 `$(...)` 的代码时用编辑工具写文件，别用字符串拼接。
 
 **测试分层**：
-- `dotnet test`：纯单元 + 内存级集成（真实 `BridgeDispatcher.DispatchAsync` + 临时目录）。当前 412 个（含内嵌凭证、索引程序隐藏、拼音首字母/全拼检索、备份/Git、流式取消链路、索引原子覆盖、内容窗口初始定位、在线工具、原位菜单定位、小工具/在线工具重命名、统一属性字段、托盘菜单规划与弹层定位、主窗口尺寸记忆、内容窗口位置/尺寸记忆）。
-- `node --test tests/*.cjs`：前端行为级测试（vm 沙箱 + DOM shim，跑 `app.js`/`bridge.js`/示例工具页面）。当前 129 个。注意：vm 沙箱里创建的对象带另一套原型，断言前先用 `JSON.parse(JSON.stringify(...))` 归一化。
+- `dotnet test`：纯单元 + 内存级集成（真实 `BridgeDispatcher.DispatchAsync` + 临时目录）。当前 436 个（含内嵌凭证、索引程序隐藏、拼音首字母/全拼检索、备份/Git、流式取消链路、索引原子覆盖、内容窗口初始定位、在线工具、原位菜单定位、小工具/在线工具重命名、统一属性字段、托盘菜单规划与弹层定位、主窗口尺寸记忆、内容窗口位置/尺寸记忆、AI 端点识别与双协议流式、使用次数播种）。
+- `node --test tests/*.cjs`：前端行为级测试（vm 沙箱 + DOM shim，跑 `app.js`/`bridge.js`/示例工具页面）。当前 133 个。注意：vm 沙箱里创建的对象带另一套原型，断言前先用 `JSON.parse(JSON.stringify(...))` 归一化。
 - `--self-test`：真起 Kestrel，27 项 HTTP 断言（host 头校验、路径穿越、工具资源、设置页、品牌图标；其中工具资源每工具 3 项，数量随已装工具数浮动）。
 - ad-hoc 验收脚本：**不入库**，历史脚本在 `%TEMP%`。GUI 真机验证可用 WebView2 远程调试：启动时设 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=<port> --remote-debugging-address=127.0.0.1`，再用 CDP（`/json/list` + WebSocket）注入 JS / 截图；日志断言（`-> ok`、`已打开...窗口`）仍是最轻量的手段。
 
@@ -305,7 +319,7 @@ Windows 下主窗口 `Closing` 会先取消再收起到托盘（`Shell/TrayIcon.
 ## 11. 提交前检查清单
 
 - [ ] `dotnet build` → 0 error / 0 warning
-- [ ] `dotnet test` → 全绿（当前基线 **412**）
+- [ ] `dotnet test` → 全绿（当前基线 **436**）
 - [ ] `node --test tests/app.test.cjs` → 全绿（改过 `app.js` 时必须跑）
 - [ ] `--self-test` → **27 PASS / 0 FAIL**，退出码 0
 - [ ] `dotnet publish -c Release` → **0 AOT warning**

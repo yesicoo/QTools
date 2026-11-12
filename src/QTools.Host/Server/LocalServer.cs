@@ -189,6 +189,12 @@ internal sealed partial class LocalServer : IDisposable
         SampleTools.EnsureSamples(QTools.Host.Configuration.AppPaths.ToolsDirectory);
         server.Tools.Rescan();
 
+        // 小工具 / 手动启动项 / 在线工具默认计入 1 次，首页可直接看到；索引程序仍从 0 次开始（只能搜索到）
+        server.Usage.EnsureSeeded(
+            server.Tools.GetAll().Select(t => t.Id)
+                .Concat(server.Apps.GetAll().Select(a => a.Id))
+                .Concat(server.WebTools.GetAll().Select(w => w.Id)));
+
         // 后台重建本机程序索引：旧索引在扫描期间持续可用，完成后原子覆盖并推送列表刷新
         server.ProgramIndex.StartBackgroundRefresh();
 

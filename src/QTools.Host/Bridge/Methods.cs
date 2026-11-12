@@ -306,6 +306,11 @@ internal static class ImportMethods
                 payload.AcceptHighSeverity, CancellationToken.None)
             .ConfigureAwait(false);
 
+        if (result.Saved)
+        {
+            context.Usage?.EnsureSeeded(new[] { result.ToolId });
+        }
+
         return JsonSerializer.SerializeToElement(
             new ImportToolView(
                 result.ToolId,
@@ -442,6 +447,7 @@ internal static class LauncherMethods
             .AddAsync(payload.Name, payload.Target, payload.Arguments, payload.WorkingDirectory,
                 payload.Category, payload.Glyph, CancellationToken.None)
             .ConfigureAwait(false);
+        context.Usage?.EnsureSeeded(new[] { app.Id });
 
         return JsonSerializer.SerializeToElement(
             new OkResult(true), AppJsonContext.Default.OkResult);
@@ -500,11 +506,12 @@ internal static class LauncherMethods
             AppJsonContext.Default.AddWebToolPayload)
             ?? throw new BridgeException("BRIDGE_BAD_REQUEST", "payload 解析失败");
 
-        await context.WebToolStore
+        var web = await context.WebToolStore
             .AddAsync(
                 payload.Name, payload.Url, payload.Category, payload.Glyph,
                 CancellationToken.None, payload.Description)
             .ConfigureAwait(false);
+        context.Usage?.EnsureSeeded(new[] { web.Id });
 
         return JsonSerializer.SerializeToElement(
             new OkResult(true), AppJsonContext.Default.OkResult);
@@ -871,6 +878,7 @@ internal static class ToolCreatorMethods
 
         var result = RebuildResult(view);
         var toolId = await context.Creator.CreateAsync(result, acceptHigh, CancellationToken.None).ConfigureAwait(false);
+        context.Usage?.EnsureSeeded(new[] { toolId });
 
         // 不再由宿主主动弹独立窗口（「保存并打开」的弹窗行为已取消）；
         // 前端拿到 toolId 后自行决定：默认请求 manager.embedTool 在右侧内嵌展示。
@@ -1271,7 +1279,7 @@ internal static class BackupMethods
         Backup.GitPushResult result;
         try
         {
-            result = await git.PushAsync(url, context.CancellationToken, context.PushDelta).ConfigureAwait(false);
+            result = await git.PushAsync(url, context.CancellationToken, context.PushOutput).ConfigureAwait(false);
         }
         catch (BridgeException ex)
         {
@@ -1288,7 +1296,7 @@ internal static class BackupMethods
     {
         var url = ResolveRemoteUrl(context);
         var result = await RequireGitBackup(context)
-            .RestoreAsync(url, context.CancellationToken, context.PushDelta)
+            .RestoreAsync(url, context.CancellationToken, context.PushOutput)
             .ConfigureAwait(false);
         RefreshAfterRestore(context);
         return JsonSerializer.SerializeToElement(result, AppJsonContext.Default.BackupRestoreResult);
