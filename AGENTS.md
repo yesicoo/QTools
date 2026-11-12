@@ -215,6 +215,11 @@ tests/QTools.Tests/         22 个测试文件，纯单元 + 内存级集成
 不要依赖任何人本地的 `core.autocrlf` 配置，也不要删这个文件。CI（`.github/workflows/dotnet-desktop.yml`）
 跑 Release 构建 + 单测 + 前端测试 + AOT 发布 + `--self-test`，push 后以上全部是远端门禁。
 
+发布同样在 Actions 里完成（`.github/workflows/release.yml`）：推送 `v*` 标签（或在 Actions 页手动触发并填版本号）
+→ 构建 + 全量测试 + AOT 单文件 + 自检 → `gh release create` 自动创建 Release 并上传
+`QTools-<版本>-win-x64.exe` 与同名 `.sha256`（`GITHUB_TOKEN` + `permissions: contents: write`，无需额外 Secret）。
+版本号通过 `-p:Version=<标签去 v>` 注入，保证 exe 内 `AppInfo.Version` 与 Release 一致；同版本重复发布会失败，属预期。
+
 ### 7.14 拼音检索必须同时覆盖首字母与全拼，且不依赖运行时编码
 
 历史 bug：旧实现用 `Encoding.GetEncoding("GB2312")` 按区位反查声母，只能给首字母、没有全拼；

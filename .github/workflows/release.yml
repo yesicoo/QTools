@@ -1,0 +1,87 @@
+# QTools Release：推送 v* 标签（或手动触发）→ 构建 AOT 单文件 → 创建 GitHub Release 并上传 exe + SHA256
+name: Release
+
+on:
+  push:
+    tags: [ "v*" ]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "版本号（不带 v，例如 1.2.0）"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: version
+        shell: pwsh
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if ($env:GITHUB_REF_TYPE -eq "tag") {
+            $tag = $env:GITHUB_REF_NAME
+          } else {
+            $tag = "v" + $env:INPUT_VERSION.Trim().TrimStart('v')
+          }
+          if ($tag -notmatch '^v\d+\.\d+\.\d+') {
+            throw "版本标签必须形如 v1.2.3（可带 -rc.1 后缀），当前：$tag"
+          }
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "version=$($tag.Substring(1))" >> $env:GITHUB_OUTPUT
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Build (Release, 0 warning)
+        run: dotnet build -c Release
+
+      - name: Unit tests
+        run: dotnet test -c Release --no-build
+
+      - name: Frontend tests
+        run: node --test tests/app.test.cjs tests/bridge.test.cjs tests/qrcode.test.cjs
+
+      - name: Publish AOT single-file
+        run: dotnet publish src/QTools.Host/QTools.Host.csproj -c Release -r win-x64 -o publish/win-x64 -p:Version=${{ steps.version.outputs.version }}
+
+      - name: Self-test (27 HTTP assertions)
+        run: ./publish/win-x64/QTools.exe --self-test
+
+      - name: Package release asset
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $asset = "dist/QTools-${{ steps.version.outputs.version }}-win-x64.exe"
+          Copy-Item publish/win-x64/QTools.exe $asset
+          $hash = (Get-FileHash $asset -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $(Split-Path $asset -Leaf)" | Set-Content "$asset.sha256" -Encoding ascii
+
+      - name: Create GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.version.outputs.tag }}" `
+            "dist/QTools-${{ steps.version.outputs.version }}-win-x64.exe" `
+            "dist/QTools-${{ steps.version.outputs.version }}-win-x64.exe.sha256" `
+            --title "QTools ${{ steps.version.outputs.version }}" `
+            --generate-notes `
+            --latest

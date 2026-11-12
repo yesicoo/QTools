@@ -10,6 +10,11 @@
 
 完整设计（架构、威胁模型、桥接协议、里程碑记录）见 [docs/01-方案A-设计.md](docs/01-方案A-设计.md)。
 
+## 下载
+
+最新单文件版本见 [Releases](https://github.com/yesicoo/QTools/releases)：下载 `QTools-<版本>-win-x64.exe`（附 SHA256），双击即可运行。
+发布由推送 `v*` 标签自动触发（`.github/workflows/release.yml`，构建 + 测试 + AOT + 自检通过后才上传），也可在 Actions 页手动触发。
+
 ## 平台支持（如实标注验证状态）
 
 | 平台 | WebView 引擎 | 是否 WebKit | 状态 |
