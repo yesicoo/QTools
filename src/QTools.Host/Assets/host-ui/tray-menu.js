@@ -10,9 +10,9 @@
   }
 
   function activate(item) {
-    var method = item.kind === "tool" ? "manager.openContent"
+    var method = item.kind === "tool" ? "manager.openTool"
       : item.kind === "web" ? "manager.openWebTool" : "manager.launchApp";
-    var payload = item.kind === "tool" ? { view: "tool", toolId: item.id }
+    var payload = item.kind === "tool" ? { toolId: item.id }
       : item.kind === "web" ? { webId: item.id } : { appId: item.id };
     host.callManager(method, payload).catch(function () { /* 失败由主界面日志/提示负责 */ });
     hide();

@@ -48,6 +48,9 @@ public sealed class BridgeContext
 
     public required JsonElement? Payload { get; init; }
 
+    /// <summary>实际发送请求的窗口 Id（window.* 控制方法据此定位窗口；内嵌 iframe 的发送者是内容窗口）。</summary>
+    public Guid? WindowId { get; init; }
+
     public required LoadedTool? Tool { get; init; }
 
     /// <summary>存储服务（storage.* 用）。</summary>

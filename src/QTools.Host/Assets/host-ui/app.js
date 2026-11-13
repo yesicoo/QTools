@@ -26,6 +26,8 @@
     return q;
   })();
   var isContentMode = pageQuery.mode === "content";
+  /* 管理窗口由哪个入口打开（tool/create/import/web/version）；版本管理直达时关闭按钮直接收起窗口 */
+  var contentEntryView = isContentMode ? (pageQuery.view || "") : "";
   if (isContentMode && document.body) {
     document.body.classList.remove("mode-main");
     document.body.classList.add("mode-content");
@@ -252,12 +254,14 @@
     return li;
   }
 
-  /** 列表点击：工具 → 内容窗口贴边打开；本机程序 → 直接启动；在线工具 → 独立窗口在线打开。 */
+  /** 列表点击：小工具 → 独立工具窗口；本机程序 → 直接启动；在线工具 → 独立窗口在线打开。 */
   function openItem(item) {
     if (!host) { toast("桥接不可用", true); return; }
     if (item.kind === "tool") {
       if (!item.isValid) { toast("manifest 无效，不能打开", true); return; }
-      openContentPanel("tool", item.id);
+      host.callManager("manager.openTool", { toolId: item.id }).then(function () {
+        refreshLauncher();
+      }, function (e) { toast("打开失败：" + errText(e), true); });
     } else if (item.kind === "web") {
       if (!item.isValid) { toast("配置无效，不能打开", true); return; }
       openWebTool(item);
@@ -291,6 +295,41 @@
   }
 
   /* ================= 内嵌打开工具 ================= */
+  /* 内容窗口的置顶 / 钉住状态（钉住 = 锁定位置和大小），由宿主持久化 */
+  var contentWindowState = { topmost: false, pinned: false };
+
+  function renderContentWindowState() {
+    var top = $("tool-topmost");
+    if (top) { top.className = "btn ghost sm" + (contentWindowState.topmost ? " active" : ""); }
+    var pin = $("tool-pinned");
+    if (pin) { pin.className = "btn ghost sm" + (contentWindowState.pinned ? " active" : ""); }
+  }
+
+  function loadContentWindowState() {
+    if (!host || !isContentMode) { return; }
+    host.callManager("manager.getContentWindowState", {}).then(function (state) {
+      contentWindowState.topmost = !!(state && state.topmost);
+      contentWindowState.pinned = !!(state && state.pinned);
+      renderContentWindowState();
+    }, function () { /* 内容窗口可能已关闭 */ });
+  }
+
+  function setContentWindowFlag(method, enabled) {
+    if (!host || !isContentMode) { return; }
+    host.callManager(method, { enabled: enabled }).then(function (state) {
+      contentWindowState.topmost = !!(state && state.topmost);
+      contentWindowState.pinned = !!(state && state.pinned);
+      renderContentWindowState();
+    }, function (e) { toast("操作失败：" + errText(e), true); });
+  }
+
+  on("tool-topmost", "click", function () {
+    setContentWindowFlag("manager.setContentWindowTopmost", !contentWindowState.topmost);
+  });
+  on("tool-pinned", "click", function () {
+    setContentWindowFlag("manager.setContentWindowPinned", !contentWindowState.pinned);
+  });
+
   function toolMeta(t) {
     return "v" + (t.version || "") +
       ((t.permissions && t.permissions.length) ? " · " + t.permissions.join(" / ") : "") +
@@ -400,6 +439,7 @@
     folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
     globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18 15 15 0 0 1 0-18z"/>',
     trash: '<path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 13h10l1-13"/>',
+    shortcut: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>',
     minus: '<circle cx="12" cy="12" r="9"/><path d="M8 12h8"/>',
     eyeOff: '<path d="M3 3l18 18M10.6 10.6a2 2 0 0 0 2.8 2.8M9.9 5.2A9.6 9.6 0 0 1 12 5c7 0 10 7 10 7a17 17 0 0 1-3 3.9M6.6 6.6A16.6 16.6 0 0 0 2 12s3 7 10 7a9.7 9.7 0 0 0 5.4-1.6"/>',
     back: '<path d="M19 12H5m7-7-7 7 7 7"/>'
@@ -525,6 +565,18 @@
         renameInput.focus();
         renameInput.select();
       }, "edit");
+    }
+
+    /* 桌面快捷方式：双击直达独立工具窗口（应用已在托盘时由单实例转发打开） */
+    if (item.kind === "tool") {
+      menuAction("创建桌面快捷方式", "", function () {
+        closeItemMenu();
+        host.callManager("manager.createToolShortcut", { toolId: item.id }).then(function (r) {
+          toast("已创建桌面快捷方式：" + ((r && r.fileName) || item.name));
+        }, function (e) {
+          toast("创建失败：" + errText(e), true);
+        });
+      }, "shortcut");
     }
 
     menuAction(item.kind === "app" ? "移除" : item.kind === "program" ? "隐藏" : "删除", "danger", function () {
@@ -846,8 +898,9 @@
     currentVersionTool = null;
     updateSequence += 1;
     pendingUpdate = null;
-    /* 从哪来回哪去：内嵌中的工具回内嵌视图，否则回首页 */
+    /* 从哪来回哪去：内嵌中的工具回内嵌视图，版本管理直达则收起管理窗口，否则回首页 */
     if (currentTool) { showView("tool-view"); }
+    else if (isContentMode && contentEntryView === "version") { closeContent(); }
     else { showView("content-home"); }
   });
 
@@ -1025,8 +1078,8 @@
       acceptHighSeverity: !!acceptHighSeverity
     }).then(function (r) {
       if (r.saved) {
-        toast("已导入 " + r.toolName + "（已在内容窗口打开）");
-        embedSavedTool(r.toolId, r.toolName);
+        toast("已导入 " + r.toolName + "（已打开独立窗口）");
+        openSavedTool(r.toolId);
         return;
       }
 
@@ -1160,8 +1213,8 @@
       .then(function (r) {
         if (requestNumber !== createSequence) { refreshTools(); return; }
         lastGenerated = null;
-        toast("已保存 " + r.toolId + "（已在内容窗口打开）");
-        embedSavedTool(r.toolId, null);
+        toast("已保存 " + r.toolId + "（已打开独立窗口）");
+        openSavedTool(r.toolId);
       }, function (e) {
         if (requestNumber !== createSequence) { return; }
         $("create-save").disabled = false;
@@ -1169,13 +1222,12 @@
       });
   }
 
-  /** 保存/导入成功后：刷新工具清单并直接在当前内容窗口内嵌打开。 */
-  function embedSavedTool(toolId, fallbackName) {
-    refreshTools().then(function () {
-      var listTool = allTools.filter(function (tool) { return tool.id === toolId; })[0] ||
-        { id: toolId, name: fallbackName || toolId, version: "", isValid: true };
-      embedTool(listTool);
-    });
+  /** 保存/导入成功后：打开独立工具窗口，并收起当前管理窗口。 */
+  function openSavedTool(toolId) {
+    if (!host) { return; }
+    host.callManager("manager.openTool", { toolId: toolId }).then(function () {
+      if (isContentMode) { closeContent(); }
+    }, function (e) { toast("打开失败：" + errText(e), true); });
   }
 
   /* ================= 搜索 + 键盘流 ================= */
@@ -1321,12 +1373,17 @@
 
   if (host) {
     if (isContentMode) {
+      loadContentWindowState();
       refreshTools().then(function () {
         var view = pageQuery.view;
         if (view === "tool" && pageQuery.toolId) {
           var t = allTools.filter(function (x) { return x.id === pageQuery.toolId; })[0] ||
             { id: pageQuery.toolId, name: pageQuery.toolId, version: "", isValid: true };
           embedTool(t);
+        } else if (view === "version" && pageQuery.toolId) {
+          var versionTool = allTools.filter(function (x) { return x.id === pageQuery.toolId; })[0] ||
+            { id: pageQuery.toolId, name: pageQuery.toolId, version: "", isValid: true };
+          showVersionView(versionTool);
         } else if (view === "create") {
           showCreateView();
         } else if (view === "import") {

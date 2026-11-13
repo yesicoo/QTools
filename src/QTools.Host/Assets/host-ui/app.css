@@ -214,6 +214,7 @@ ul.nav-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; 
 .btn.primary:hover { filter: brightness(1.08); }
 .btn.ghost { background: transparent; color: var(--text); border-color: var(--border); }
 .btn.ghost:hover { background: var(--accent-soft); }
+.btn.ghost.active { background: var(--accent-soft); color: var(--accent-strong); border-color: var(--accent); }
 .btn.sm { padding: 5px 10px; font-size: 12.5px; }
 .btn.icon { padding: 7px; border-radius: 8px; }
 .btn.icon svg { width: 17px; height: 17px; }

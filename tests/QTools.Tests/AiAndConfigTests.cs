@@ -656,6 +656,46 @@ public sealed class ConfigStoreTests : IDisposable
     }
 
     [Fact]
+    public void WindowPreferencesRoundTrip()
+    {
+        var original = AppConfig.Default with
+        {
+            Shell = AppConfig.Default.Shell! with
+            {
+                ContentWindowTopmost = true,
+                ContentWindowPinned = true,
+                ToolWindowStates = new Dictionary<string, ToolWindowState>
+                {
+                    ["pet"] = new(
+                        Topmost: true, Pinned: false, ChipLeft: 320.5, ChipTop: 18,
+                        Left: 1280, Top: 96, Width: 860, Height: 640),
+                    ["doc"] = new(Topmost: false, Pinned: true),
+                },
+            },
+        };
+
+        ConfigStore.Save(ConfigPath, original);
+        var shell = ConfigStore.Load(ConfigPath).Shell!;
+
+        Assert.True(shell.ContentWindowTopmost);
+        Assert.True(shell.ContentWindowPinned);
+        Assert.NotNull(shell.ToolWindowStates);
+        Assert.True(shell.ToolWindowStates!["pet"].Topmost);
+        Assert.False(shell.ToolWindowStates["pet"].Pinned);
+        Assert.Equal(320.5, shell.ToolWindowStates["pet"].ChipLeft);
+        Assert.Equal(18, shell.ToolWindowStates["pet"].ChipTop);
+        Assert.Equal(1280, shell.ToolWindowStates["pet"].Left);
+        Assert.Equal(96, shell.ToolWindowStates["pet"].Top);
+        Assert.Equal(860, shell.ToolWindowStates["pet"].Width);
+        Assert.Equal(640, shell.ToolWindowStates["pet"].Height);
+        Assert.False(shell.ToolWindowStates["doc"].Topmost);
+        Assert.True(shell.ToolWindowStates["doc"].Pinned);
+        Assert.Null(shell.ToolWindowStates["doc"].ChipLeft);
+        Assert.Null(shell.ToolWindowStates["doc"].Left);
+        Assert.Null(shell.ToolWindowStates["doc"].Width);
+    }
+
+    [Fact]
     public void CorruptFileIsBackedUpAndDefaultsUsed()
     {
         File.WriteAllText(ConfigPath, "{ not json");

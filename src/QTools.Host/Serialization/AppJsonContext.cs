@@ -26,6 +26,8 @@ namespace QTools.Host.Serialization;
 [JsonSerializable(typeof(StorageListResult))]
 [JsonSerializable(typeof(ToolListItem))]
 [JsonSerializable(typeof(ToolListResult))]
+[JsonSerializable(typeof(WindowStateView))]
+[JsonSerializable(typeof(ToolShortcutResult))]
 [JsonSerializable(typeof(AiConfigView))]
 [JsonSerializable(typeof(ServerInfoView))]
 [JsonSerializable(typeof(Configuration.AppConfig))]
@@ -34,6 +36,7 @@ namespace QTools.Host.Serialization;
 [JsonSerializable(typeof(Configuration.StorageConfigSection))]
 [JsonSerializable(typeof(Configuration.BackupConfigSection))]
 [JsonSerializable(typeof(Configuration.ShellConfigSection))]
+[JsonSerializable(typeof(Configuration.ToolWindowState))]
 [JsonSerializable(typeof(FilesSavePayload))]
 [JsonSerializable(typeof(ImportToolPayload))]
 [JsonSerializable(typeof(ImportToolView))]
@@ -121,6 +124,16 @@ internal sealed record ToolListItem(
 
 /// <summary>工具列表结果。</summary>
 internal sealed record ToolListResult(IReadOnlyList<ToolListItem> Tools);
+
+/// <summary>窗口控制状态（window.* / manager.*Window*）：置顶 + 钉住；工具窗口另带「⋯」按钮位置。</summary>
+internal sealed record WindowStateView(
+    bool Topmost,
+    bool Pinned,
+    double? ChipLeft = null,
+    double? ChipTop = null);
+
+/// <summary>桌面快捷方式创建结果（manager.createToolShortcut）。</summary>
+internal sealed record ToolShortcutResult(string Path, string FileName);
 
 /// <summary>AI 配置视图——绝不包含 API Key。</summary>
 internal sealed record AiConfigView(

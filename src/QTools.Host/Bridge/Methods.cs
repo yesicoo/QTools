@@ -147,6 +147,41 @@ internal static class ManagerMethods
             new OkResult(true), AppJsonContext.Default.OkResult));
     }
 
+    /// <summary>在桌面创建小工具快捷方式（指向 QTools.exe --open-tool &lt;id&gt;，双击直达独立窗口）。</summary>
+    public static System.Threading.Tasks.Task<JsonElement> CreateToolShortcutAsync(BridgeContext context)
+    {
+        var toolId = PayloadReader.ReadToolId(context.Payload);
+        if (!context.Registry!.TryGet(toolId, out var tool) || tool is null || !tool.IsValid)
+        {
+            throw new BridgeException("TOOL_NOT_FOUND", $"工具不存在或 manifest 无效：{toolId}");
+        }
+
+        if (!OperatingSystem.IsWindows())
+        {
+            throw new BridgeException("PLATFORM_NOT_SUPPORTED", "创建桌面快捷方式当前仅支持 Windows");
+        }
+
+        var desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+        if (string.IsNullOrWhiteSpace(desktop))
+        {
+            throw new BridgeException("SHORTCUT_FAILED", "无法定位系统桌面目录");
+        }
+
+        try
+        {
+            var path = ToolShortcut.Create(desktop, tool.Id, tool.Manifest.Name);
+            Log.Info($"已创建桌面快捷方式：{path}");
+            return System.Threading.Tasks.Task.FromResult(JsonSerializer.SerializeToElement(
+                new ToolShortcutResult(path, Path.GetFileName(path)),
+                AppJsonContext.Default.ToolShortcutResult));
+        }
+        catch (Exception ex) when (ex is not BridgeException)
+        {
+            Log.Warn($"创建桌面快捷方式失败：{ex.Message}");
+            throw new BridgeException("SHORTCUT_FAILED", "创建桌面快捷方式失败，请查看日志");
+        }
+    }
+
     public static System.Threading.Tasks.Task<JsonElement> GetAiConfigAsync(BridgeContext context)
     {
         var ai = context.Ai;
@@ -711,6 +746,103 @@ internal static class SettingsMethods
     }
 }
 
+/// <summary>独立工具窗口控制（window.*）：置顶 / 钉住。内嵌 iframe 调用会被宿主拒绝。</summary>
+internal static class WindowMethods
+{
+    private static Guid RequireWindowId(BridgeContext context) =>
+        context.WindowId ?? throw new BridgeException("WINDOW_NOT_FOUND", "无法确定调用窗口");
+
+    private static Shell.ShellHost RequireShell(BridgeContext context) =>
+        context.Shell ?? throw new BridgeException("INTERNAL_ERROR", "宿主壳未就绪");
+
+    public static async System.Threading.Tasks.Task<JsonElement> GetStateAsync(BridgeContext context)
+    {
+        var state = await RequireShell(context)
+            .GetToolWindowStateAsync(RequireWindowId(context), context.ToolId)
+            .ConfigureAwait(false);
+        return JsonSerializer.SerializeToElement(state, AppJsonContext.Default.WindowStateView);
+    }
+
+    public static async System.Threading.Tasks.Task<JsonElement> SetTopmostAsync(BridgeContext context)
+    {
+        var enabled = PayloadReader.ReadEnabled(context.Payload);
+        var state = await RequireShell(context)
+            .SetToolWindowTopmostAsync(RequireWindowId(context), context.ToolId, enabled)
+            .ConfigureAwait(false);
+        return JsonSerializer.SerializeToElement(state, AppJsonContext.Default.WindowStateView);
+    }
+
+    public static async System.Threading.Tasks.Task<JsonElement> SetPinnedAsync(BridgeContext context)
+    {
+        var enabled = PayloadReader.ReadEnabled(context.Payload);
+        var state = await RequireShell(context)
+            .SetToolWindowPinnedAsync(RequireWindowId(context), context.ToolId, enabled)
+            .ConfigureAwait(false);
+        return JsonSerializer.SerializeToElement(state, AppJsonContext.Default.WindowStateView);
+    }
+
+    public static async System.Threading.Tasks.Task<JsonElement> OpenVersionManagerAsync(BridgeContext context)
+    {
+        await RequireShell(context)
+            .OpenVersionManagerAsync(RequireWindowId(context), context.ToolId)
+            .ConfigureAwait(false);
+        return JsonSerializer.SerializeToElement(new OkResult(true), AppJsonContext.Default.OkResult);
+    }
+
+    /// <summary>保存「⋯」按钮在窗口内的位置（按工具记忆，下次打开恢复）。</summary>
+    public static async System.Threading.Tasks.Task<JsonElement> SaveChipPositionAsync(BridgeContext context)
+    {
+        var left = PayloadReader.ReadNumber(context.Payload, "left");
+        var top = PayloadReader.ReadNumber(context.Payload, "top");
+        if (left is null || top is null)
+        {
+            throw new BridgeException("BRIDGE_BAD_REQUEST", "payload.left/top 必填且为有限数值");
+        }
+
+        var state = await RequireShell(context)
+            .SetToolWindowChipPositionAsync(
+                RequireWindowId(context), context.ToolId, left.Value, top.Value)
+            .ConfigureAwait(false);
+        return JsonSerializer.SerializeToElement(state, AppJsonContext.Default.WindowStateView);
+    }
+}
+
+/// <summary>内容窗口控制（manager.*，仅宿主管理界面）：置顶 / 钉住。</summary>
+internal static class ContentWindowMethods
+{
+    private static Guid RequireWindowId(BridgeContext context) =>
+        context.WindowId ?? throw new BridgeException("WINDOW_NOT_FOUND", "无法确定调用窗口");
+
+    private static Shell.ShellHost RequireShell(BridgeContext context) =>
+        context.Shell ?? throw new BridgeException("INTERNAL_ERROR", "宿主壳未就绪");
+
+    public static async System.Threading.Tasks.Task<JsonElement> GetStateAsync(BridgeContext context)
+    {
+        var state = await RequireShell(context)
+            .GetContentWindowStateAsync(RequireWindowId(context))
+            .ConfigureAwait(false);
+        return JsonSerializer.SerializeToElement(state, AppJsonContext.Default.WindowStateView);
+    }
+
+    public static async System.Threading.Tasks.Task<JsonElement> SetTopmostAsync(BridgeContext context)
+    {
+        var enabled = PayloadReader.ReadEnabled(context.Payload);
+        var state = await RequireShell(context)
+            .SetContentWindowTopmostAsync(RequireWindowId(context), enabled)
+            .ConfigureAwait(false);
+        return JsonSerializer.SerializeToElement(state, AppJsonContext.Default.WindowStateView);
+    }
+
+    public static async System.Threading.Tasks.Task<JsonElement> SetPinnedAsync(BridgeContext context)
+    {
+        var enabled = PayloadReader.ReadEnabled(context.Payload);
+        var state = await RequireShell(context)
+            .SetContentWindowPinnedAsync(RequireWindowId(context), enabled)
+            .ConfigureAwait(false);
+        return JsonSerializer.SerializeToElement(state, AppJsonContext.Default.WindowStateView);
+    }
+}
+
 /// <summary>工具版本管理 + AI 更新（manager.*，仅宿主管理界面可用）。</summary>
 internal static class VersionMethods
 {
@@ -1048,13 +1180,13 @@ internal static class ShellMethods
     public static async System.Threading.Tasks.Task<JsonElement> OpenContentAsync(BridgeContext context)
     {
         var view = PayloadReader.ReadStringPayload(context.Payload, "view", required: true, maxLength: 20);
-        if (view is not ("tool" or "create" or "import" or "web"))
+        if (view is not ("tool" or "version" or "create" or "import" or "web"))
         {
-            throw new BridgeException("BRIDGE_BAD_REQUEST", "view 必须是 tool / create / import / web");
+            throw new BridgeException("BRIDGE_BAD_REQUEST", "view 必须是 tool / version / create / import / web");
         }
 
         string? toolId = null;
-        if (view == "tool")
+        if (view is "tool" or "version")
         {
             toolId = PayloadReader.ReadToolId(context.Payload);
             if (!context.Registry!.TryGet(toolId, out var tool) || tool is null || !tool.IsValid)
@@ -1062,7 +1194,10 @@ internal static class ShellMethods
                 throw new BridgeException("TOOL_NOT_FOUND", $"工具不存在或 manifest 无效：{toolId}");
             }
 
-            context.Usage?.Record(toolId);
+            if (view == "tool")
+            {
+                context.Usage?.Record(toolId);
+            }
         }
 
         if (context.Shell is null)

@@ -146,9 +146,10 @@ public sealed partial class ToolStaticFileMiddleware
             return;
         }
 
-        // HTML：读入 → 注入桥接垫层 → 输出
+        // HTML：读入 → 注入桥接垫层与独立窗口控制条 → 输出
         var html = await File.ReadAllTextAsync(fullPath);
-        var transformed = HtmlRewriter.InjectBridgeScript(html, toolId, QTools.Host.AppInfo.Version);
+        var transformed = HtmlRewriter.InjectWindowControlsScript(
+            HtmlRewriter.InjectBridgeScript(html, toolId, QTools.Host.AppInfo.Version));
         var bytes = System.Text.Encoding.UTF8.GetBytes(transformed);
         context.Response.ContentType = contentType;
         context.Response.ContentLength = bytes.Length;

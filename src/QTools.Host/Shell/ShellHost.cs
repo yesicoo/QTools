@@ -1,6 +1,7 @@
 using Photino.NET;
 using QTools.Host.Bridge;
 using QTools.Host.Logging;
+using QTools.Host.Serialization;
 using QTools.Host.Storage;
 using QTools.Host.Tools;
 
@@ -66,6 +67,20 @@ public sealed class ShellHost
 
     /// <summary>内容窗口位置/尺寸保存防抖序号。</summary>
     private long _contentWindowSaveSerial;
+
+    /// <summary>独立工具窗口位置/尺寸保存防抖序号（按 toolId，连续拖动只在停下后落一次盘）。</summary>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, long> _toolWindowSaveSerials =
+        new(StringComparer.Ordinal);
+
+    /// <summary>窗口置顶/钉住状态（按窗口 Id；钉住 = 锁定位置和大小）。</summary>
+    private readonly Dictionary<Guid, WindowStateEntry> _windowStates = new();
+
+    private sealed class WindowStateEntry
+    {
+        public bool Pinned;
+        public bool BaseResizable = true;
+        public WindowPinLock? Lock;
+    }
 
     private int _port;
     private ServerInfoView _serverInfo = null!;
@@ -790,6 +805,7 @@ public sealed class ShellHost
             var title = view switch
             {
                 "tool" => $"{_registry.Find(toolId ?? "")?.Name ?? "工具"} — QTools",
+                "version" => $"{_registry.Find(toolId ?? "")?.Name ?? "工具"} — 版本管理",
                 "create" => "AI 创建工具 — QTools",
                 "import" => "导入工具 — QTools",
                 "web" => "添加在线工具 — QTools",
@@ -835,17 +851,18 @@ public sealed class ShellHost
                     SaveContentWindowNow();
                     Log.Info("内容窗口请求关闭");
                 })
-                .RegisterClosedHandler((_, _) =>
+                .RegisterClosedHandler((sender, _) =>
                 {
                     Log.Info("内容窗口已关闭");
                     _contentWindow = null;
+                    ForgetWindowState(sender);
                 })
                 .Load(url);
 
             if (savedOrigin is { } origin)
             {
-                // 保存的位置是物理像素（与 MoveTo 一致），在首次 Show 前应用避免闪一下
-                window.MoveTo(origin.Left, origin.Top, allowOutsideWorkArea: true);
+                // 在首次 Show 前应用避免闪一下：Windows 用 MoveTo（物理像素），其他平台用 SetLeft/SetTop
+                RestoreWindowOrigin(window, origin.Left, origin.Top);
                 Log.Info($"已打开内容窗口（恢复上次位置 {origin.Left},{origin.Top}，" +
                     $"{contentWidth}×{contentHeight}）→ {url}");
             }
@@ -862,6 +879,11 @@ public sealed class ShellHost
             AttachBridge(window, BridgeDispatcher.HostToolId);
             window.Show();
 
+            var flags = LoadContentWindowFlags();
+            GetWindowState(window);
+            window.SetTopmost(flags.Topmost);
+            ApplyPin(window, flags.Pinned);
+
             return System.Threading.Tasks.Task.CompletedTask;
         }).ConfigureAwait(false);
     }
@@ -870,9 +892,38 @@ public sealed class ShellHost
     private static (int Left, int Top)? ResolveContentWindowOrigin(
         int? savedLeft, int? savedTop, ref int width, ref int height)
     {
+        if (savedLeft is null || savedTop is null)
+        {
+            return null;
+        }
+
+        var origin = ResolveSavedWindowOrigin(
+            savedLeft, savedTop, ContentWindowBounds.MinWidth, ContentWindowBounds.MinHeight,
+            ref width, ref height);
+        if (origin is null)
+        {
+            Log.Info("内容窗口上次位置已不在任何显示器上，回退贴主窗口打开");
+        }
+
+        return origin;
+    }
+
+    /// <summary>
+    /// 校验上次保存的窗口位置是否仍可见；Windows 用显示器探测，并把尺寸按该显示器工作区
+    /// 夹一次（DIP）；其他平台拿不到显示器信息，按保存值直接恢复。位置无效返回 null，尺寸保持不变。
+    /// </summary>
+    private static (int Left, int Top)? ResolveSavedWindowOrigin(
+        int? savedLeft, int? savedTop, int minWidth, int minHeight, ref int width, ref int height)
+    {
         if (savedLeft is not int left || savedTop is not int top)
         {
             return null;
+        }
+
+        if (!OperatingSystem.IsWindows())
+        {
+            // macOS/Linux 没有跨平台显示器探测（Photino 不暴露屏幕布局）：信任保存值，不做工作区夹取
+            return (left, top);
         }
 
         // 用窗口左上角内部一点探测所在显示器：整块屏幕被拔掉时无法命中
@@ -881,16 +932,29 @@ public sealed class ShellHost
         if (!NativeWindowInfo.IsPointOnAnyMonitor(probeX, probeY) ||
             NativeWindowInfo.GetWorkAreaAtPoint(probeX, probeY) is not { } work)
         {
-            Log.Info("内容窗口上次位置已不在任何显示器上，回退贴主窗口打开");
             return null;
         }
 
         var scale = NativeWindowInfo.GetDpiAtPoint(probeX, probeY) / 96.0;
-        var maxWidth = Math.Max(ContentWindowBounds.MinWidth, (int)Math.Round(work.Width / scale));
-        var maxHeight = Math.Max(ContentWindowBounds.MinHeight, (int)Math.Round(work.Height / scale));
+        var maxWidth = Math.Max(minWidth, (int)Math.Round(work.Width / scale));
+        var maxHeight = Math.Max(minHeight, (int)Math.Round(work.Height / scale));
         width = Math.Min(width, maxWidth);
         height = Math.Min(height, maxHeight);
         return (left, top);
+    }
+
+    /// <summary>按保存的坐标恢复窗口位置：Windows 用物理像素 MoveTo，其他平台用 Photino 的 SetLeft/SetTop。</summary>
+    private static void RestoreWindowOrigin(PhotinoWindow window, int left, int top)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            window.MoveTo(left, top, allowOutsideWorkArea: true);
+        }
+        else
+        {
+            window.SetLeft(left);
+            window.SetTop(top);
+        }
     }
 
     private void ScheduleContentWindowSave()
@@ -933,13 +997,40 @@ public sealed class ShellHost
         }
     }
 
-    /// <summary>在 UI 线程读取内容窗口的物理矩形（位置物理像素、尺寸换算为 DIP）。</summary>
+    /// <summary>在 UI 线程读取内容窗口矩形；最大化/最小化或尺寸越界时不落盘。</summary>
     private (int Left, int Top, int Width, int Height)? CaptureContentWindowBounds()
     {
         var window = _contentWindow;
-        if (window is null or { IsClosed: true } || window.WindowState != PhotinoWindowState.Normal)
+        if (window is null || CaptureWindowBounds(window) is not { } bounds)
         {
             return null;
+        }
+
+        return ContentWindowBounds.ShouldPersist(bounds.Width, bounds.Height) ? bounds : null;
+    }
+
+    /// <summary>
+    /// 在 UI 线程读取窗口矩形（最大化/最小化返回 null）。Windows 用 Win32 物理像素定位、
+    /// DPI 折算尺寸（DIP）；其他平台用 Photino 的 Left/Top/Width/Height，
+    /// 与恢复用的 SetLeft/SetTop/SetSize 处于同一坐标空间。
+    /// </summary>
+    private static (int Left, int Top, int Width, int Height)? CaptureWindowBounds(PhotinoWindow window)
+    {
+        if (window.IsClosed || window.WindowState != PhotinoWindowState.Normal)
+        {
+            return null;
+        }
+
+        if (!OperatingSystem.IsWindows())
+        {
+            var width = window.Width;
+            var height = window.Height;
+            if (width <= 0 || height <= 0)
+            {
+                return null;
+            }
+
+            return (window.Left, window.Top, width, height);
         }
 
         if (!NativeWindowInfo.TryGetWindowRect(window.WindowHandle, out var rect))
@@ -949,14 +1040,7 @@ public sealed class ShellHost
 
         var scale = NativeWindowInfo.GetDpiAtPoint(
             rect.Left + rect.Width / 2, rect.Top + rect.Height / 2) / 96.0;
-        var width = (int)Math.Round(rect.Width / scale);
-        var height = (int)Math.Round(rect.Height / scale);
-        if (!ContentWindowBounds.ShouldPersist(width, height))
-        {
-            return null;
-        }
-
-        return (rect.Left, rect.Top, width, height);
+        return (rect.Left, rect.Top, (int)Math.Round(rect.Width / scale), (int)Math.Round(rect.Height / scale));
     }
 
     private static void PersistContentWindowBounds((int Left, int Top, int Width, int Height) bounds)
@@ -986,6 +1070,76 @@ public sealed class ShellHost
             });
         Log.Debug(
             $"内容窗口位置/尺寸已保存：({bounds.Left},{bounds.Top}) {bounds.Width}×{bounds.Height}");
+    }
+
+    /// <summary>工具窗口位置/尺寸防抖保存：连续拖动/缩放时只在停下约 500ms 后落一次盘。</summary>
+    private void ScheduleToolWindowBoundsSave(string toolId)
+    {
+        var serial = _toolWindowSaveSerials.AddOrUpdate(toolId, 1, (_, value) => value + 1);
+        _ = System.Threading.Tasks.Task.Run(async () =>
+        {
+            try
+            {
+                await System.Threading.Tasks.Task.Delay(500).ConfigureAwait(false);
+                if (!_toolWindowSaveSerials.TryGetValue(toolId, out var latest) || latest != serial)
+                {
+                    return;
+                }
+
+                await InvokeOnUiThreadAsync(() =>
+                {
+                    if (CaptureToolWindowBounds(toolId) is { } bounds)
+                    {
+                        PersistToolWindowBounds(toolId, bounds);
+                    }
+
+                    return System.Threading.Tasks.Task.CompletedTask;
+                }).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"保存工具窗口位置失败：{ex.Message}");
+            }
+        });
+    }
+
+    private void SaveToolWindowBoundsNow(object? sender, string toolId)
+    {
+        if (sender is PhotinoWindow window && CaptureToolWindowBounds(window) is { } bounds)
+        {
+            PersistToolWindowBounds(toolId, bounds);
+        }
+    }
+
+    private (int Left, int Top, int Width, int Height)? CaptureToolWindowBounds(string toolId) =>
+        _toolWindows.TryGetValue(toolId, out var window) ? CaptureToolWindowBounds(window) : null;
+
+    /// <summary>在 UI 线程读取工具窗口矩形；最大化/最小化或尺寸越界时不落盘。</summary>
+    private static (int Left, int Top, int Width, int Height)? CaptureToolWindowBounds(PhotinoWindow window) =>
+        CaptureWindowBounds(window) is { } bounds && ToolWindowBounds.ShouldPersist(bounds.Width, bounds.Height)
+            ? bounds
+            : null;
+
+    private static void PersistToolWindowBounds(string toolId, (int Left, int Top, int Width, int Height) bounds)
+    {
+        var state = LoadToolWindowState(toolId);
+        if (state.Left == bounds.Left &&
+            state.Top == bounds.Top &&
+            state.Width == bounds.Width &&
+            state.Height == bounds.Height)
+        {
+            return;
+        }
+
+        SaveToolWindowState(toolId, state with
+        {
+            Left = bounds.Left,
+            Top = bounds.Top,
+            Width = bounds.Width,
+            Height = bounds.Height,
+        });
+        Log.Debug(
+            $"工具窗口 {toolId} 位置/尺寸已保存：({bounds.Left},{bounds.Top}) {bounds.Width}×{bounds.Height}");
     }
 
     /// <summary>关闭内容窗口（前端「收起」按钮 / manager.closeContent）。</summary>
@@ -1059,22 +1213,54 @@ public sealed class ShellHost
                 _toolWindows.Remove(tool.Id);
             }
 
+            var windowPrefs = LoadToolWindowState(tool.Id);
+            var (windowWidth, windowHeight) = ToolWindowBounds.ResolveSize(
+                tool.Manifest.Window.Width, tool.Manifest.Window.Height,
+                windowPrefs.Width, windowPrefs.Height);
+            var savedOrigin = ResolveSavedWindowOrigin(
+                windowPrefs.Left, windowPrefs.Top,
+                ToolWindowBounds.MinWidth, ToolWindowBounds.MinHeight,
+                ref windowWidth, ref windowHeight);
+            if (savedOrigin is null && windowPrefs.Left is not null && windowPrefs.Top is not null)
+            {
+                Log.Info($"工具窗口 {tool.Id} 上次位置已不在任何显示器上，改为居中打开");
+            }
+
             var window = new PhotinoWindow()
                 .SetTitle($"{tool.Name} — QTools")
                 .SetUseOsDefaultSize(false)
-                .SetSize(tool.Manifest.Window.Width, tool.Manifest.Window.Height)
+                .SetUseOsDefaultLocation(false)
+                .SetSize(windowWidth, windowHeight)
                 .SetResizable(tool.Manifest.Window.Resizable)
                 .SetContextMenuEnabled(_devMode)
                 .SetDevToolsEnabled(_devMode)
                 .SetUserDataFolder(QTools.Host.Configuration.AppPaths.WebViewUserDataDirectory)
-                .Center()
-                .RegisterClosingHandler((_, _) => Log.Info($"工具窗口请求关闭：{tool.Id}"))
-                .RegisterClosedHandler((_, _) =>
+                .RegisterLocationChangedHandler((_, _) => ScheduleToolWindowBoundsSave(tool.Id))
+                .RegisterSizeChangedHandler((_, _) => ScheduleToolWindowBoundsSave(tool.Id))
+                .RegisterClosingHandler((sender, _) =>
+                {
+                    SaveToolWindowBoundsNow(sender, tool.Id);
+                    Log.Info($"工具窗口请求关闭：{tool.Id}");
+                })
+                .RegisterClosedHandler((sender, _) =>
                 {
                     Log.Info($"工具窗口已关闭：{tool.Id}");
                     _toolWindows.Remove(tool.Id);
+                    ForgetWindowState(sender);
                 })
                 .Load(ToolUrl(tool));
+
+            if (savedOrigin is { } origin)
+            {
+                // 在首次 Show 前应用避免闪一下：Windows 用 MoveTo（物理像素），其他平台用 SetLeft/SetTop
+                RestoreWindowOrigin(window, origin.Left, origin.Top);
+                Log.Info($"已打开工具窗口 {tool.Id}（恢复上次位置 {origin.Left},{origin.Top}，" +
+                    $"{windowWidth}×{windowHeight}）");
+            }
+            else
+            {
+                window.Center();
+            }
 
             // 声明了 media 权限才开启麦克风/摄像头/屏幕捕获能力（宿主侧授权，避免浏览器弹窗）
             if (tool.HasPermission(ToolPermission.Media))
@@ -1091,10 +1277,201 @@ public sealed class ShellHost
             // PhotinoX：Run() 只显示主窗口；运行期创建的窗口必须显式 Show() 才会初始化 WebView 并可见
             window.Show();
 
+            GetWindowState(window).BaseResizable = tool.Manifest.Window.Resizable;
+            window.SetTopmost(windowPrefs.Topmost);
+            ApplyPin(window, windowPrefs.Pinned);
+
             Log.Info($"已打开工具窗口 {tool.Id} → {ToolUrl(tool)}");
 
             await System.Threading.Tasks.Task.CompletedTask;
         }).ConfigureAwait(false);
+    }
+
+    /* ================= 窗口控制：置顶 / 钉住 ================= */
+
+    /// <summary>独立工具窗口状态（window.getState）；调用者必须确实是该工具的独立窗口。</summary>
+    internal System.Threading.Tasks.Task<WindowStateView> GetToolWindowStateAsync(Guid windowId, string toolId) =>
+        InvokeOnUiThreadAsync(() =>
+        {
+            var window = RequireToolWindow(windowId, toolId);
+            var prefs = LoadToolWindowState(toolId);
+            return ReadWindowState(window) with { ChipLeft = prefs.ChipLeft, ChipTop = prefs.ChipTop };
+        });
+
+    /// <summary>设置独立工具窗口置顶（window.setTopmost）。</summary>
+    internal System.Threading.Tasks.Task<WindowStateView> SetToolWindowTopmostAsync(
+        Guid windowId, string toolId, bool enabled) =>
+        InvokeOnUiThreadAsync(() =>
+        {
+            var window = RequireToolWindow(windowId, toolId);
+            window.SetTopmost(enabled);
+            SaveToolWindowState(toolId, LoadToolWindowState(toolId) with { Topmost = enabled });
+            Log.Info($"工具窗口 {toolId} 置顶：{(enabled ? "开" : "关")}");
+            return ReadWindowState(window);
+        });
+
+    /// <summary>设置独立工具窗口钉住（window.setPinned）：锁定位置和大小。</summary>
+    internal System.Threading.Tasks.Task<WindowStateView> SetToolWindowPinnedAsync(
+        Guid windowId, string toolId, bool enabled) =>
+        InvokeOnUiThreadAsync(() =>
+        {
+            var window = RequireToolWindow(windowId, toolId);
+            ApplyPin(window, enabled);
+            SaveToolWindowState(toolId, LoadToolWindowState(toolId) with { Pinned = enabled });
+            Log.Info($"工具窗口 {toolId} 钉住：{(enabled ? "开" : "关")}");
+            return ReadWindowState(window);
+        });
+
+    /// <summary>保存「⋯」按钮在窗口内的位置（window.saveChipPosition），按工具记忆。</summary>
+    internal System.Threading.Tasks.Task<WindowStateView> SetToolWindowChipPositionAsync(
+        Guid windowId, string toolId, double left, double top) =>
+        InvokeOnUiThreadAsync(() =>
+        {
+            var window = RequireToolWindow(windowId, toolId);
+            var prefs = LoadToolWindowState(toolId) with { ChipLeft = left, ChipTop = top };
+            SaveToolWindowState(toolId, prefs);
+            return ReadWindowState(window) with { ChipLeft = prefs.ChipLeft, ChipTop = prefs.ChipTop };
+        });
+
+    /// <summary>内容窗口状态（manager.getContentWindowState）；仅内容窗口自身可调用。</summary>
+    internal System.Threading.Tasks.Task<WindowStateView> GetContentWindowStateAsync(Guid windowId) =>
+        InvokeOnUiThreadAsync(() => ReadWindowState(RequireContentWindow(windowId)));
+
+    /// <summary>从独立工具窗口打开该工具的版本管理（window.openVersionManager）。</summary>
+    internal async System.Threading.Tasks.Task OpenVersionManagerAsync(Guid windowId, string toolId)
+    {
+        await InvokeOnUiThreadAsync(() =>
+        {
+            RequireToolWindow(windowId, toolId);
+            return System.Threading.Tasks.Task.CompletedTask;
+        }).ConfigureAwait(false);
+
+        await OpenContentAsync("version", toolId).ConfigureAwait(false);
+    }
+
+    /// <summary>设置内容窗口置顶（manager.setContentWindowTopmost）。</summary>
+    internal System.Threading.Tasks.Task<WindowStateView> SetContentWindowTopmostAsync(Guid windowId, bool enabled) =>
+        InvokeOnUiThreadAsync(() =>
+        {
+            var window = RequireContentWindow(windowId);
+            window.SetTopmost(enabled);
+            SaveContentWindowFlags(enabled, IsPinned(window.Id));
+            Log.Info($"内容窗口置顶：{(enabled ? "开" : "关")}");
+            return ReadWindowState(window);
+        });
+
+    /// <summary>设置内容窗口钉住（manager.setContentWindowPinned）：锁定位置和大小。</summary>
+    internal System.Threading.Tasks.Task<WindowStateView> SetContentWindowPinnedAsync(Guid windowId, bool enabled) =>
+        InvokeOnUiThreadAsync(() =>
+        {
+            var window = RequireContentWindow(windowId);
+            ApplyPin(window, enabled);
+            SaveContentWindowFlags(window.Topmost, enabled);
+            Log.Info($"内容窗口钉住：{(enabled ? "开" : "关")}");
+            return ReadWindowState(window);
+        });
+
+    private PhotinoWindow RequireToolWindow(Guid windowId, string toolId)
+    {
+        if (!_toolWindows.TryGetValue(toolId, out var window) || window.IsClosed || window.Id != windowId)
+        {
+            throw new BridgeException("WINDOW_NOT_FOUND", "该操作仅支持独立工具窗口");
+        }
+
+        return window;
+    }
+
+    private PhotinoWindow RequireContentWindow(Guid windowId)
+    {
+        if (_contentWindow is not { IsClosed: false } window || window.Id != windowId)
+        {
+            throw new BridgeException("WINDOW_NOT_FOUND", "内容窗口未打开");
+        }
+
+        return window;
+    }
+
+    private WindowStateEntry GetWindowState(PhotinoWindow window)
+    {
+        if (!_windowStates.TryGetValue(window.Id, out var state))
+        {
+            state = new WindowStateEntry();
+            _windowStates[window.Id] = state;
+        }
+
+        return state;
+    }
+
+    private bool IsPinned(Guid windowId) =>
+        _windowStates.TryGetValue(windowId, out var state) && state.Pinned;
+
+    private WindowStateView ReadWindowState(PhotinoWindow window) =>
+        new(window.Topmost, IsPinned(window.Id));
+
+    /// <summary>应用钉住：锁缩放 + 锁移动（Windows 子类化窗口过程；其他平台仅锁缩放）。</summary>
+    private void ApplyPin(PhotinoWindow window, bool pinned)
+    {
+        var state = GetWindowState(window);
+        state.Pinned = pinned;
+        if (pinned && state.Lock is null)
+        {
+            state.Lock = WindowPinLock.Install(window.WindowHandle, () => _windowStates.Remove(window.Id));
+        }
+
+        state.Lock?.SetPinned(pinned);
+        window.SetResizable(!pinned && state.BaseResizable);
+    }
+
+    private void ForgetWindowState(object? sender)
+    {
+        // 已安装窗口过程锁的条目交给 WM_NCDESTROY 回调移除，避免委托提前被回收
+        if (sender is PhotinoWindow window &&
+            _windowStates.TryGetValue(window.Id, out var state) &&
+            state.Lock is null)
+        {
+            _windowStates.Remove(window.Id);
+        }
+    }
+
+    private static (bool Topmost, bool Pinned) LoadContentWindowFlags()
+    {
+        var config = QTools.Host.Ai.ConfigStore.Load(QTools.Host.Configuration.AppPaths.ConfigFilePath);
+        return (config.Shell?.ContentWindowTopmost ?? false, config.Shell?.ContentWindowPinned ?? false);
+    }
+
+    private static void SaveContentWindowFlags(bool topmost, bool pinned)
+    {
+        var path = QTools.Host.Configuration.AppPaths.ConfigFilePath;
+        var config = QTools.Host.Ai.ConfigStore.Load(path);
+        var shell = config.Shell ?? new QTools.Host.Configuration.ShellConfigSection();
+        if (shell.ContentWindowTopmost == topmost && shell.ContentWindowPinned == pinned)
+        {
+            return;
+        }
+
+        QTools.Host.Ai.ConfigStore.Save(
+            path, config with { Shell = shell with { ContentWindowTopmost = topmost, ContentWindowPinned = pinned } });
+    }
+
+    private static QTools.Host.Configuration.ToolWindowState LoadToolWindowState(string toolId)
+    {
+        var config = QTools.Host.Ai.ConfigStore.Load(QTools.Host.Configuration.AppPaths.ConfigFilePath);
+        return config.Shell?.ToolWindowStates is { } states && states.TryGetValue(toolId, out var state)
+            ? state
+            : new QTools.Host.Configuration.ToolWindowState();
+    }
+
+    private static void SaveToolWindowState(string toolId, QTools.Host.Configuration.ToolWindowState state)
+    {
+        var path = QTools.Host.Configuration.AppPaths.ConfigFilePath;
+        var config = QTools.Host.Ai.ConfigStore.Load(path);
+        var shell = config.Shell ?? new QTools.Host.Configuration.ShellConfigSection();
+        var states = shell.ToolWindowStates is null
+            ? new Dictionary<string, QTools.Host.Configuration.ToolWindowState>(StringComparer.Ordinal)
+            : new Dictionary<string, QTools.Host.Configuration.ToolWindowState>(
+                shell.ToolWindowStates, StringComparer.Ordinal);
+        states[toolId] = state;
+        QTools.Host.Ai.ConfigStore.Save(path, config with { Shell = shell with { ToolWindowStates = states } });
     }
 
     /// <summary>打开原生文件选择对话框，让用户挑一个可执行文件（未选择返回 null）。</summary>
@@ -1377,7 +1754,9 @@ public sealed class ShellHost
             {
                 // 流式通道：AI 生成 / Git 推送的增量信封经此直达页面（与最终响应同一窗口、同一 id）
                 responseJson = await _dispatcher.DispatchAsync(
-                    toolId, message, push: envelope => _ = SendToWindowAsync(window, envelope))
+                    toolId, message,
+                    push: envelope => _ = SendToWindowAsync(window, envelope),
+                    senderWindowId: window.Id)
                     .ConfigureAwait(false);
             }
             catch (Exception ex)

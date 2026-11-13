@@ -36,6 +36,17 @@ internal static class HtmlRewriter
         return insertAt < 0 ? script + html : html.Insert(insertAt, script);
     }
 
+    /// <summary>
+    /// 注入独立窗口控制条脚本（置顶 / 钉住）。脚本自身判断：
+    /// 内嵌 iframe（window.top !== window.self）或桥接不可用时不会显示任何东西。
+    /// </summary>
+    public static string InjectWindowControlsScript(string html)
+    {
+        const string script = "<script src=\"/__host__/window-controls.js\"></script>";
+        var bodyClose = html.LastIndexOf("</body>", StringComparison.OrdinalIgnoreCase);
+        return bodyClose < 0 ? script + html : html.Insert(bodyClose, script);
+    }
+
     /// <summary>定位 <c>&lt;head&gt;</c> 或 <c>&lt;head ...&gt;</c> 开标签的结束位置（其后即为插入点）；未找到返回 -1。</summary>
     private static int IndexOfHeadOpenTag(string html)
     {

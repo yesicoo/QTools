@@ -34,6 +34,8 @@
     <EnableUnsafeUTF7Encoding Condition="'$(Configuration)' == 'Release'">false</EnableUnsafeUTF7Encoding>
     <!-- 架构红线：AOT 下反射式 JSON 不可用，从特性开关上直接禁用（误用立即抛异常而非静默降级） -->
     <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
+    <!-- 源生成 COM（[GeneratedComInterface]）生成的封送代码使用指针，开启 unsafe -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <SatelliteResourceLanguages>zh-Hans;en</SatelliteResourceLanguages>
   </PropertyGroup>
 

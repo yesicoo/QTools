@@ -1,0 +1,99 @@
+/* 独立工具窗口收缩菜单（window-controls.js 的 Shadow DOM 样式） */
+:host {
+  position: fixed;
+  top: 8px;
+  right: 8px;
+  z-index: 2147483647;
+  display: block;
+  font: 12px/1.4 "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  transition: transform .22s ease;
+}
+
+/* 贴边自动收缩：整块滑出窗口，只留 6px 露头；移近了由 JS 去掉这个类 */
+:host(.retracted) {
+  transform: translate(var(--hide-x, 0px), var(--hide-y, 0px));
+}
+
+.wrap { position: relative; }
+
+.trigger {
+  all: unset;
+  cursor: grab;
+  touch-action: none;
+  width: 27px;
+  height: 27px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: rgba(24, 27, 33, .78);
+  color: #f2f3f5;
+  font-size: 16px;
+  line-height: 1;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, .28);
+  opacity: .25;
+  transition: opacity .15s ease, background .15s ease;
+}
+
+/* 鼠标靠近（.near 由 JS 按距离切换）、悬停、键盘聚焦或菜单展开时恢复清晰 */
+.wrap.near .trigger,
+.trigger:hover,
+.trigger:focus-visible,
+.trigger.open {
+  opacity: 1;
+}
+
+.trigger:hover { background: rgba(24, 27, 33, .92); }
+.trigger.open { background: #4f46e5; }
+.wrap.dragging .trigger { cursor: grabbing; opacity: 1; }
+
+/* 图标圆盘：容器是按钮中心的一个零尺寸点，按钮按 --tx/--ty 向外排布 */
+.menu {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 0;
+  height: 0;
+}
+
+.menu[hidden] { display: none; }
+
+.item {
+  all: unset;
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: rgba(24, 27, 33, .94);
+  color: #f2f3f5;
+  box-shadow: 0 3px 12px rgba(0, 0, 0, .34);
+  cursor: pointer;
+  transform: translate(-50%, -50%) translate(var(--tx, 0px), var(--ty, 0px));
+}
+
+.item svg {
+  width: 15px;
+  height: 15px;
+  display: block;
+  pointer-events: none;
+}
+
+.item:hover { background: #4f46e5; }
+.item.active { background: #4f46e5; color: #fff; }
+
+/* 从按钮中心旋出；每个图标错开 0.03s，形成扇形展开 */
+.menu.menu-anim .item {
+  animation: menu-fan .18s ease-out both;
+}
+
+.menu.menu-anim .item:nth-child(2) { animation-delay: .03s; }
+.menu.menu-anim .item:nth-child(3) { animation-delay: .06s; }
+.menu.menu-anim .item:nth-child(4) { animation-delay: .09s; }
+
+@keyframes menu-fan {
+  from { opacity: 0; transform: translate(-50%, -50%) scale(.35); }
+  to { opacity: 1; transform: translate(-50%, -50%) translate(var(--tx, 0px), var(--ty, 0px)) scale(1); }
+}

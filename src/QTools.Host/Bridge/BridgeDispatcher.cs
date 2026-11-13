@@ -152,12 +152,20 @@ public sealed class BridgeDispatcher
         // tool.getManifest —— 无需权限
         Register("tool.getManifest", ToolMethods.GetManifestAsync, null);
 
+        // window.* —— 独立工具窗口的窗口控制（置顶 / 钉住）；内嵌 iframe 调用会被宿主拒绝
+        Register("window.getState", WindowMethods.GetStateAsync, null);
+        Register("window.setTopmost", WindowMethods.SetTopmostAsync, null);
+        Register("window.setPinned", WindowMethods.SetPinnedAsync, null);
+        Register("window.openVersionManager", WindowMethods.OpenVersionManagerAsync, null);
+        Register("window.saveChipPosition", WindowMethods.SaveChipPositionAsync, null);
+
         // manager.* —— 仅宿主管理界面
         Register("manager.getServerInfo", ManagerMethods.GetServerInfoAsync, null, hostOnly: true);
         Register("manager.listTools", ManagerMethods.ListToolsAsync, null, hostOnly: true);
         Register("manager.openTool", ManagerMethods.OpenToolAsync, null, hostOnly: true);
         Register("manager.deleteTool", ManagerMethods.DeleteToolAsync, null, hostOnly: true);
         Register("manager.renameTool", ManagerMethods.RenameToolAsync, null, hostOnly: true);
+        Register("manager.createToolShortcut", ManagerMethods.CreateToolShortcutAsync, null, hostOnly: true);
         Register("manager.getAiConfig", ManagerMethods.GetAiConfigAsync, null, hostOnly: true);
         Register("manager.setAiConfig", ManagerMethods.SetAiConfigAsync, null, hostOnly: true);
         Register("manager.openSettings", SettingsMethods.OpenSettingsAsync, null, hostOnly: true);
@@ -182,6 +190,9 @@ public sealed class BridgeDispatcher
         Register("manager.hideProgram", LauncherMethods.HideProgramAsync, null, hostOnly: true);
         Register("manager.unhideProgram", LauncherMethods.UnhideProgramAsync, null, hostOnly: true);
         Register("manager.revealItem", LauncherMethods.RevealItemAsync, null, hostOnly: true);
+        Register("manager.getContentWindowState", ContentWindowMethods.GetStateAsync, null, hostOnly: true);
+        Register("manager.setContentWindowTopmost", ContentWindowMethods.SetTopmostAsync, null, hostOnly: true);
+        Register("manager.setContentWindowPinned", ContentWindowMethods.SetPinnedAsync, null, hostOnly: true);
         Register("manager.generateTool", ToolCreatorMethods.GenerateToolAsync, null, hostOnly: true);
         Register("manager.createTool", ToolCreatorMethods.CreateToolAsync, null, hostOnly: true);
         Register("manager.fixTool", ToolCreatorMethods.FixToolAsync, null, hostOnly: true);
@@ -224,8 +235,9 @@ public sealed class BridgeDispatcher
     /// <param name="authoritativeToolId">宿主侧窗口绑定的 toolId（权威来源）。</param>
     /// <param name="rawMessage">页面传来的原始 JSON 字符串。</param>
     /// <param name="push">流式推送通道（可选）：收到已序列化的 {"id","stream":...} 信封，直接发给页面。</param>
+    /// <param name="senderWindowId">发送请求的窗口 Id（可选；window.* 用它确认调用者确实是独立工具窗口）。</param>
     public async System.Threading.Tasks.Task<string> DispatchAsync(
-        string authoritativeToolId, string rawMessage, Action<string>? push = null)
+        string authoritativeToolId, string rawMessage, Action<string>? push = null, Guid? senderWindowId = null)
     {
         var requestId = "unknown";
         var methodName = "unknown";
@@ -326,6 +338,7 @@ public sealed class BridgeDispatcher
                 Method = request.Method,
                 RequestId = requestId,
                 Payload = request.Payload,
+                WindowId = senderWindowId,
                 Tool = tool,
                 Storage = _storage,
                 Registry = _tools,

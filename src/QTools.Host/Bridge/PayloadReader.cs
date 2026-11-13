@@ -102,6 +102,37 @@ internal static class PayloadReader{
                element.ValueKind == JsonValueKind.True;
     }
 
+    /// <summary>读取 { enabled: bool }（窗口置顶/钉住开关）。</summary>
+    public static bool ReadEnabled(JsonElement? payload)
+    {
+        var root = RequireObject(payload);
+        if (!root.TryGetProperty("enabled", out var element) ||
+            element.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+        {
+            throw new BridgeException("BRIDGE_BAD_REQUEST", "payload.enabled 必填且为布尔值");
+        }
+
+        return element.ValueKind == JsonValueKind.True;
+    }
+
+    /// <summary>读取有限数值字段（「⋯」按钮位置）；缺失或非数值返回 null，由调用方决定是否报错。</summary>
+    public static double? ReadNumber(JsonElement? payload, string name)
+    {
+        if (payload is null || payload.Value.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        if (!payload.Value.TryGetProperty(name, out var element) ||
+            element.ValueKind != JsonValueKind.Number)
+        {
+            return null;
+        }
+
+        var value = element.GetDouble();
+        return double.IsFinite(value) ? value : null;
+    }
+
     /// <summary>读取 ai.chat 的 { messages, temperature } 并做边界校验。</summary>
     public static (IReadOnlyList<(string Role, string Content)> Messages, double? Temperature) ReadChatOptions(JsonElement? payload)
     {

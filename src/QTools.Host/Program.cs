@@ -59,6 +59,19 @@ internal static class Program
         using var singleInstance = new Mutex(initiallyOwned: true, "QTools.Host.SingleInstance", out var isFirstInstance);
         if (!isFirstInstance)
         {
+            // 桌面快捷方式：把「打开工具」转交给已运行实例（托盘里的 QTools 可能没有主窗口）
+            if (!string.IsNullOrWhiteSpace(options.OpenToolId))
+            {
+                var forwarded = SingleInstanceOpenTool.TryForward(options.OpenToolId, TimeSpan.FromSeconds(3));
+                Log.Warn($"QTools 已在运行，转发打开工具 {options.OpenToolId}：{(forwarded ? "成功" : "失败")}");
+                if (!forwarded)
+                {
+                    SingleInstanceOpenTool.ShowForwardFailure(options.OpenToolId);
+                }
+
+                return forwarded ? 0 : 4;
+            }
+
             const string message = "QTools 已在运行中（单实例模式），本次启动被忽略。";
             Log.Warn(message);
             Console.Error.WriteLine(message);
@@ -117,6 +130,21 @@ internal static class Program
                 // 在消息循环启动前登记待打开工具：ShellHost.Run 里开完主窗口立即打开它
                 shell.QueueToolToOpen(tool);
             }
+
+            // 桌面快捷方式二次启动 → 命名管道转发；监听必须在消息循环外启动（UI 线程只负责开窗）
+            using var openToolListener = SingleInstanceOpenTool.StartListener(async toolId =>
+            {
+                var tool = server.Tools.Find(toolId);
+                if (tool is null || !tool.IsValid)
+                {
+                    Log.Warn($"单实例转发：工具不存在或无效：{toolId}");
+                    return false;
+                }
+
+                Log.Info($"单实例转发：打开工具窗口 {toolId}");
+                await shell.OpenToolAsync(tool).ConfigureAwait(false);
+                return true;
+            });
 
             var exitCode = shell.Run(server.Port, options.DevMode);
             Log.Info("宿主正常退出");

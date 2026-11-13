@@ -38,7 +38,7 @@
 # 构建（Debug，够日常开发）
 dotnet build
 
-# 单元测试（当前基线 436 个）
+# 单元测试（当前基线 445 个）
 dotnet test
 
 # 开发运行（会开 GUI 窗口）
@@ -75,12 +75,12 @@ src/QTools.Host/
 ├── Security/               ISecretStore + DPAPI / AES-GCM 两套实现
 ├── Serialization/          AppJsonContext —— 全宿主唯一 JSON 上下文
 ├── Server/                 LocalServer / ToolStaticFileMiddleware / HtmlRewriter / HostAssetEndpoint / SelfTest
-├── Shell/                  ShellHost（窗口生命周期）/ WindowRegistry（窗口→toolId 绑定）
+├── Shell/                  ShellHost（窗口生命周期）/ WindowRegistry（窗口→toolId 绑定）/ WindowPinLock（钉住）
 ├── Storage/ToolStorage.cs  按 toolId 隔离的 JSON 键值存储
 ├── Text/                   PinyinInitials（静态汉字→拼音表：首字母 + 全拼检索）
 ├── Tools/                  ToolManifest+校验 / ToolScanner(注册表) / ToolVersionStore / ToolFiles / SampleTools
 └── Assets/
-    ├── host-ui/            index.html + app.js + app.css + settings.html + settings.js + bridge.js
+    ├── host-ui/            index.html + app.js + app.css + settings.html + settings.js + bridge.js + window-controls.js/css
     └── samples/            默认工具：json-formatter、qrcode-generator
 
 tests/QTools.Tests/         22 个测试文件，纯单元 + 内存级集成
@@ -201,7 +201,7 @@ tests/QTools.Tests/         22 个测试文件，纯单元 + 内存级集成
 
 1. **后台索引期间旧索引必须始终可用**：`ProgramIndex` 启动即加载旧索引供列表使用，后台重扫完成后才「临时文件 + 原子 `File.Move` 覆盖 + 整体换内存快照」；扫描失败保留旧索引。绝不允许"正在索引 → 列表为空"。
 2. **索引 id 必须稳定**：`BuildId = "idx-" + SHA256(小写目标路径) 前 12 位`，跨次扫描不变——使用频次按 id 记账，id 漂移会清零频次。手动启动项按目标路径优先去重。
-3. **主窗口 / 内容窗口是同一页面两种模式**：`?mode=content&view=tool|create|import` 由宿主全 URL 打开内容窗口，`app.js` 里 `isContentMode` 分流（主窗口隐藏 `.content`，内容窗口隐藏侧栏）。改前端路由时不要把两个模式合并回一页。
+3. **主窗口 / 内容窗口是同一页面两种模式**：`?mode=content&view=tool|version|create|import|web` 由宿主全 URL 打开内容窗口，`app.js` 里 `isContentMode` 分流（主窗口隐藏 `.content`，内容窗口隐藏侧栏）。改前端路由时不要把两个模式合并回一页。
 4. **本机程序必须按解析后的真实目标去重，并过滤垃圾快捷方式**：同一个程序的 .lnk 会同时出现在所有用户开始菜单 / 用户开始菜单 / 桌面 / 厂商子目录，按 .lnk 自身路径去重必然产生重复。`ProgramDiscovery.DedupePrograms` 用 `LnkTargetResolver` 解析 .lnk 的 LocalBasePath（MS-SHLLINK 字节解析，无 COM；LinkInfo 是 7 个 dword，LocalBasePathOffset 在 +16，LocalBasePath 实测恒为 ANSI，仅当字节模式 `x 00 x 00` 时才按 UTF-16 读）得到目标路径作为去重键；解析不出目标的 .lnk 回退用文件名去重；解析出非可执行目标（.chm/.url/文件夹）直接丢弃。`ProgramIndex.BuildEntries` 的 `IsJunkName` 过滤卸载/安装/帮助/手册/官网/许可等垃圾名（中文子串匹配、英文 `\b` 整词匹配——`Helper`/`AppUpdate` 必须存活，`unins000` 必须命中）。改动去重或过滤时不要退回「按 .lnk 路径去重」的旧实现。
 
 回归测试见 `LauncherIndexTests` / `ProgramDedupeTests` / `ShellMathTests` / `UnifiedLauncherBridgeTests` / `tests/app.test.cjs`。
@@ -247,11 +247,13 @@ Windows 下主窗口 `Closing` 会先取消再收起到托盘（`Shell/TrayIcon.
 
 **DPI 坐标空间的坑（2026-11 修复）**：托盘消息线程运行在 96-DPI 虚拟化上下文，`GetCursorPos` 返回逻辑坐标；Photino 窗口所在 UI 线程是 DPI 感知的，`GetMonitorInfo` 返回物理像素，`MoveTo` 也按物理像素定位，而 `SetSize` 按 DIP→物理放大（150% 下 288 宽实际 432 像素）。在托盘线程取光标再拿到 UI 线程定位，会让弹层落在约 1/1.5 的位置（缩放屏上表现为「跑到屏幕中间」而不是托盘旁）。另外应用内实测 `GetScaleFactorForMonitor` 可能返回 140 而窗口 DPI 是 144，不可作为换算依据。**约束**：光标位置、显示器工作区、`GetDpiForMonitor` 一律在 UI 线程（`ShowTrayMenuAsync` 内）用物理坐标读取，弹层像素尺寸 = DIP × dpi/96，再交给 `TrayMenuPlacement.Compute` 与 `MoveTo`；不要在托盘线程换算坐标。
 
-### 7.17 窗口几何记忆（主窗口尺寸 + 内容窗口位置/尺寸，config.json）
+### 7.17 窗口几何记忆（主窗口尺寸 + 内容窗口/工具窗口位置尺寸，config.json）
 
 用户拖拽调整主窗口大小后，`RegisterSizeChangedHandler` 拿到的是 **DIP 尺寸**（与 `SetSize` 同一坐标空间，150% 缩放下 1700 物理像素对应 1133 DIP），防抖 500ms 后写入 `config.json` 的 `shell.mainWindowWidth/Height`；启动时 `MainWindowSize.Resolve` 校验范围（280×480 ～ 8000×6000，越界按维度回退默认 340×720），再按当前显示器工作区（DIP）夹一次。
 
-内容窗口（`OpenContentAsync`）另外记住 **位置（物理像素）+ 尺寸（DIP）**：`LocationChanged` / `SizeChanged` 防抖 500ms、关闭窗口时立即写入 `shell.contentWindowLeft/Top/Width/Height`；恢复时 `ContentWindowBounds.ResolveSize` 校验尺寸（560×420 ～ 8000×6000，默认 920×680），`ResolveContentWindowOrigin` 用 `MonitorFromPoint(MONITOR_DEFAULTTONULL)` 探测保存点是否仍在任一显示器上——失效则回退 `WindowDock` 贴主窗口。位置用物理像素是因为 `MoveTo` 按物理像素定位（见 7.16 DPI 坑），尺寸用 DIP 是因为 `SetSize` 按窗口 DPI 放大；保存几何用 Win32 `GetWindowRect` + 显示器 DPI 折算，不依赖 Photino 的 `Left/Top` 属性单位。**约束**：最大化/最小化/全屏状态不落盘；复用已打开的内容窗口时不要再 `DockContentToMain`（否则用户拖好的位置每次打开工具都会被重置）；所有 `Persist*` 必须「Load → with 更新 → Save」，不要整份覆盖配置。
+内容窗口（`OpenContentAsync`）另外记住 **位置 + 尺寸**：`LocationChanged` / `SizeChanged` 防抖 500ms、关闭窗口时立即写入 `shell.contentWindowLeft/Top/Width/Height`；恢复时 `ContentWindowBounds.ResolveSize` 校验尺寸（560×420 ～ 8000×6000，默认 920×680），`ResolveContentWindowOrigin` 在 Windows 上用 `MonitorFromPoint(MONITOR_DEFAULTTONULL)` 探测保存点是否仍在任一显示器上——失效则回退 `WindowDock` 贴主窗口。**平台差异**：Windows 位置用物理像素（`MoveTo` 按物理像素定位，见 7.16 DPI 坑）、尺寸用 DIP（`SetSize` 按窗口 DPI 放大），保存走 Win32 `GetWindowRect` + 显示器 DPI 折算；macOS/Linux 没有跨平台显示器探测，改用 Photino 的 `Left/Top/Width/Height` 采集、`SetLeft/SetTop` 恢复（与采集同一坐标空间），不做工作区校验/夹取，位置若落在已拔掉的屏幕上无法自动纠正（**代码已写，未真机验证**）。**约束**：最大化/最小化/全屏状态不落盘；复用已打开的内容窗口时不要再 `DockContentToMain`（否则用户拖好的位置每次打开工具都会被重置）；所有 `Persist*` 必须「Load → with 更新 → Save」，不要整份覆盖配置。
+
+**独立工具窗口按 toolId 单独记忆**（`OpenToolAsync`）：写入 `shell.toolWindowStates.{toolId}.left/top/width/height`，坐标约定与内容窗口相同（Windows 物理像素 + DIP，其他平台 Photino 坐标）；`LocationChanged` / `SizeChanged` 按 toolId 分别防抖 500ms（`_toolWindowSaveSerials`，不同工具互不覆盖），`Closing` 时同步保存。恢复时 `ToolWindowBounds.ResolveSize` 校验尺寸（280×220 ～ 8000×6000，越界按维度回退该工具 manifest 的 `window.width/height`），`ResolveSavedWindowOrigin` 在 Windows 上探测保存点是否仍在任一显示器上——失效则回退 `Center()` 居中打开（其他平台直接信任保存值）。打开恢复必须在首次 `Show()` 前完成（Windows `MoveTo`，其他平台 `SetLeft/SetTop`），且构窗时 `SetUseOsDefaultLocation(false)`，否则系统默认位置会覆盖。**约束**：不要复用内容窗口的 `ContentWindowBounds` 默认值（其最小值 560×420 会把 320～520 宽的小工具尺寸判为无效）；最大化/最小化不落盘，恢复的是上次普通态几何。
 
 ### 7.18 AI 自动识别 OpenAI / Anthropic 两种兼容端点，思考内容要实时透传
 
@@ -279,6 +281,49 @@ AI 流式输出是未解析的 JSON 源码，正文里的换行是 `\n` 两个�
 
 **约束**：`app.js` 的 `beginStream` 维护 `state.rawOutput`，每次增量后整体经 `prettyStreamText` 还原（`\n`/`\r`/`\t`/`\"`/`\\`/`\uXXXX`）再写入 `<pre>`；转义序列可能被拆在两段增量之间，必须整段重算而不是逐段替换。思考分区是纯文本，不做还原。**只影响显示，不改变最终解析结果**；回归测试见 `tests/app.test.cjs`「AI 流式输出把 JSON 转义显示为真实换行」。
 
+### 7.22 工具窗口「置顶 / 钉住」按窗口绑定识别调用者，Windows 用 WndProc 子类化锁位置
+
+内容窗口工具栏（`tool-topmost` / `tool-pinned`）与独立工具窗口右上角的「⋯」收缩菜单（`host-ui/window-controls.js`，Shadow DOM，仅 `window.top === window.self` 时显示，含刷新 / 置顶 / 钉住 / 版本管理）提供两个开关：**置顶** = 始终显示在其他窗口之上；**钉住** = 锁定窗口位置和大小。
+
+**约束**：
+- `window.getState/setTopmost/setPinned/openVersionManager` 只允许独立工具窗口自身调用：`OnWebMessage` 把发送窗口 Id 交给分发器（`BridgeContext.WindowId`），`ShellHost.RequireToolWindow` 同时校验「toolId 对应的窗口对象」与「window.Id == 发送者」。内嵌 iframe 的发送者是内容窗口，必须被拒绝——否则会错误控制同名工具的独立窗口。
+- 版本管理由收缩菜单经 `window.openVersionManager` 打开内容窗口的 `view=version`；`manager.*` 版本方法仍是 hostOnly，不要在工具页直接放开。
+- 收缩菜单的「⋯」默认 25% 透明，指针进入按钮周围 60px 恢复清晰；按住可拖动移位（超过 4px 判定为拖动、不展开菜单），松手经 `window.saveChipPosition`（hostOnly 的 `window.*`）写入 `shell.toolWindowStates.{toolId}.chipLeft/chipTop`，打开该工具时随 `window.getState` 一起返回并由 `applySavedPosition` 恢复——位置**按工具记忆、跨窗口关闭与进程重启有效**，不要退回 sessionStorage 或单页面内存。拖动坐标必须夹在视口内（用固定 27px 尺寸夹取，且等样式表加载完成再恢复，否则未样式化布局会把位置误夹到左边缘）。
+- 收缩菜单是**图标圆盘**：刷新 / 置顶 / 钉住 / 版本管理四个 30px 圆形图标按钮（`title` 即悬浮提示，开启态 `active` 高亮）。贴边时按边缘空间朝空处排成扇形（右上角 → 左下、贴左 → 右、贴底 → 上），四周 ≥100px 时绕按钮排满一圈。半径按模式收紧：四周开阔 **36px**（图标紧贴按钮，不要再放大）、单边贴边 **46px**、角落扇形 **62px**；图标错峰 0.03s 从按钮中心旋出（0.18s）。不要再改回文字列表菜单。
+- 贴边（距任一边 ≤60px）时鼠标离开 650ms 后整块滑出窗口、只留 6px 露头（`:host(.retracted)` 用 `--hide-x/--hide-y` 位移，`.22s` 动画）；指针进入 90px 唤醒。拖到窗口中部（距各边 >60px）不会自动收缩。Photino 窗口是**原生标题栏**，最小化/最大化/关闭无法与网页按钮合并——要合并只能整窗 `SetChromeless` 自绘标题栏，拖动/缩放/DPI/钉住全部得重做，不要为了几个按钮引入。
+- 钉住必须在 **Windows** 上用 `Shell/WindowPinLock` 子类化 `GWLP_WNDPROC`：拦截 `SC_MOVE` / `SC_SIZE` / `SC_MAXIMIZE`、双击标题栏与 `WM_MOVING` / `WM_SIZING`（把候选矩形改回当前矩形）。只调 `SetResizable(false)` 挡不住标题栏拖动。非 Windows 仅锁缩放，**位置锁定未实现、未验证**。
+- 状态持久化：内容窗口 → `shell.contentWindowTopmost` / `contentWindowPinned`；独立窗口按 toolId → `shell.toolWindowStates`（`ToolWindowState`，含 `Topmost` / `Pinned` / `ChipLeft` / `ChipTop` 与窗口几何 `Left` / `Top` / `Width` / `Height`，见 7.17）。恢复必须在 `Show()` 之后（`WindowHandle` 此时才有效），统一走 `ApplyPin` / `SetTopmost`。
+- 窗口关闭时不要提前释放 `WindowPinLock` 的委托：已安装窗口过程的条目由 `WM_NCDESTROY` 回调移除，`ForgetWindowState` 只清理未装锁的条目。
+
+### 7.23 小工具一律独立窗口打开，管理窗口只承载创建/导入/版本
+
+主窗口统一列表与托盘菜单点击小工具 → `manager.openTool`（独立窗口），**不再**走 `manager.openContent("tool")` 内嵌显示。AI 创建/导入保存成功后 `openTool` 并收起管理窗口；版本管理由独立窗口收缩菜单经 `window.openVersionManager` 打开内容窗口的 `view=version`，该路由的「关闭」按钮直接 `closeContent`。
+
+**约束**：不要恢复「点击工具 → 打开内容窗口内嵌」的旧入口；内容窗口保留给 `create / import / web / version`，以及直接 URL `view=tool` 的兼容测试路径。
+
+### 7.24 桌面快捷方式直写 .lnk 字节，二次启动经命名管道转发
+
+小工具右键菜单「创建桌面快捷方式」→ `manager.createToolShortcut`（hostOnly）在桌面写
+`{工具名}.lnk`，目标固定为 `QTools.exe --open-tool <id>`，双击直达独立工具窗口。
+
+**约束**：
+
+- **COM 只能用源生成接口**：`Launcher/ToolShortcut.cs` 用 `[GeneratedComInterface]` 声明 IShellLinkW / IPersistFile，
+  `CoCreateInstance` 拿指针后经 `UniqueComInterfaceMarshaller<T>.ConvertToManaged` 包装（源生成封送需要 csproj 的
+  `AllowUnsafeBlocks`）。两条"更简单"的路都实测不通，不要回退：手工按 MS-SHLLINK 只写 LinkInfo 的 .lnk 不被
+  ShellExecute 解析（双击提示没有关联程序、WScript.Shell 读 TargetPath 为空）；`[ComImport]` coclass 的 `new`
+  在 AOT 下编译成必然抛异常的 IL，`Type.GetTypeFromCLSID + Activator` 运行时抛 `PlatformNotSupported_ComInterop`
+  （`BuiltInComInteropSupport` 开着也不行）。回归测试用 `LnkTargetResolver` 回读目标 + 参数 UTF-16 字节
+  （`ToolShortcutTests`）；功能验收必须用 ShellExecute 真双击（含中文名与已在托盘运行两种状态）。
+- **不覆盖用户的同名桌面文件**：同名 `.lnk` 已存在时，参数匹配（`--open-tool <id>` 的 UTF-16 字节）才视为自己的并原地刷新；
+  否则顺延「名称 (2).lnk」。文件名会替换 Windows 非法字符、去掉结尾点/空格、规避 CON/NUL/COM1 等保留名。
+- **单实例转发**：快捷方式在 QTools 已运行（常在托盘）时会产生第二个进程，`Program` 在单实例判断后经命名管道
+  `QTools.Host.OpenTool`（`PipeOptions.CurrentUserOnly`）把 toolId 交给主实例并立即退出；主实例在消息循环外启动监听，
+  由 UI 线程 `OpenToolAsync` 开窗，回 `OK` / `ERR`。转发失败必须 `MessageBoxW` 明确提示，不能静默退出。
+- **仅 Windows**：创建接口在非 Windows 返回 `PLATFORM_NOT_SUPPORTED`；macOS/Linux 未实现、未验证。
+
+回归测试见 `ToolShortcutTests` 与 `tests/app.test.cjs`（右键菜单「创建桌面快捷方式」）。
+
 ---
 
 ## 8. 平台事实（不要假装全平台都是 WebKit）
@@ -292,6 +337,8 @@ AI 流式输出是未解析的 JSON 源码，正文里的换行是 `\n` 两个�
 密钥存储同理：Windows 用 DPAPI，macOS/Linux 走 AES-GCM 加密文件兜底（Keychain / libsecret 原生互操作**故意未实现**）。
 
 系统托盘同理：**仅 Windows 实现**（`Shell/TrayIcon.cs`，Shell_NotifyIcon + 独立消息线程）。Windows 下关闭主窗口默认收起到托盘，托盘「退出 QTools」才真正结束进程；macOS/Linux 无托盘，关闭即退出。
+
+窗口几何记忆：Windows 走 Win32（物理像素 + DPI 折算）**已真机验证**；macOS/Linux 走 Photino `Left/Top/Width/Height` 兜底（同一坐标空间采集与恢复），**代码已写、未真机验证**，且无法探测显示器布局。钉住的位置锁定（`WindowPinLock`）**仅 Windows**，macOS/Linux 只锁缩放。
 
 **回答"支持哪些平台"时必须带上验证状态**，不要把"代码写了"说成"验证过了"。
 
@@ -321,8 +368,8 @@ AI 流式输出是未解析的 JSON 源码，正文里的换行是 `\n` 两个�
 5. **PowerShell 里 `"$(id)"` 会被当子表达式求值**。生成含 `$(...)` 的代码时用编辑工具写文件，别用字符串拼接。
 
 **测试分层**：
-- `dotnet test`：纯单元 + 内存级集成（真实 `BridgeDispatcher.DispatchAsync` + 临时目录）。当前 436 个（含内嵌凭证、索引程序隐藏、拼音首字母/全拼检索、备份/Git、流式取消链路、索引原子覆盖、内容窗口初始定位、在线工具、原位菜单定位、小工具/在线工具重命名、统一属性字段、托盘菜单规划与弹层定位、主窗口尺寸记忆、内容窗口位置/尺寸记忆、AI 端点识别与双协议流式、使用次数播种）。
-- `node --test tests/*.cjs`：前端行为级测试（vm 沙箱 + DOM shim，跑 `app.js`/`bridge.js`/示例工具页面）。当前 134 个。注意：vm 沙箱里创建的对象带另一套原型，断言前先用 `JSON.parse(JSON.stringify(...))` 归一化。
+- `dotnet test`：纯单元 + 内存级集成（真实 `BridgeDispatcher.DispatchAsync` + 临时目录）。当前 445 个（含内嵌凭证、索引程序隐藏、拼音首字母/全拼检索、备份/Git、流式取消链路、索引原子覆盖、内容窗口初始定位、在线工具、原位菜单定位、小工具/在线工具重命名、统一属性字段、托盘菜单规划与弹层定位、主窗口尺寸记忆、内容窗口位置/尺寸记忆、AI 端点识别与双协议流式、使用次数播种、窗口置顶/钉住、桌面快捷方式）。
+- `node --test tests/*.cjs`：前端行为级测试（vm 沙箱 + DOM shim，跑 `app.js`/`bridge.js`/示例工具页面）。当前 137 个。注意：vm 沙箱里创建的对象带另一套原型，断言前先用 `JSON.parse(JSON.stringify(...))` 归一化。
 - `--self-test`：真起 Kestrel，27 项 HTTP 断言（host 头校验、路径穿越、工具资源、设置页、品牌图标；其中工具资源每工具 3 项，数量随已装工具数浮动）。
 - ad-hoc 验收脚本：**不入库**，历史脚本在 `%TEMP%`。GUI 真机验证可用 WebView2 远程调试：启动时设 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=<port> --remote-debugging-address=127.0.0.1`，再用 CDP（`/json/list` + WebSocket）注入 JS / 截图；日志断言（`-> ok`、`已打开...窗口`）仍是最轻量的手段。
 
@@ -331,7 +378,7 @@ AI 流式输出是未解析的 JSON 源码，正文里的换行是 `\n` 两个�
 ## 11. 提交前检查清单
 
 - [ ] `dotnet build` → 0 error / 0 warning
-- [ ] `dotnet test` → 全绿（当前基线 **436**）
+- [ ] `dotnet test` → 全绿（当前基线 **445**）
 - [ ] `node --test tests/app.test.cjs` → 全绿（改过 `app.js` 时必须跑）
 - [ ] `--self-test` → **27 PASS / 0 FAIL**，退出码 0
 - [ ] `dotnet publish -c Release` → **0 AOT warning**

@@ -202,13 +202,14 @@ test('索引中显示进度文案，空索引显示提示', async () => {
   assert.equal(h.el('index-status').textContent, '尚未索引到本机程序');
 });
 
-test('点击小工具走内容窗口而不是本地内嵌', async () => {
+test('点击小工具直接打开独立窗口', async () => {
   const h = await setup();
   h.navItem('tool:a').click();
-  assert.deepEqual(plain(h.last('openContent').payload), { view: 'tool', toolId: 'a' });
-  await h.reply('openContent', { ok: true });
-  assert.equal(h.requests('launcherList').length, 2);
+  assert.deepEqual(plain(h.last('openTool').payload), { toolId: 'a' });
+  await h.reply('openTool', { ok: true });
+  assert.equal(h.requests('openContent').length, 0, '不再打开管理窗口');
   assert.equal(h.requests('embedTool').length, 0);
+  assert.equal(h.requests('launcherList').length, 2, '打开后刷新列表（使用次数）');
   assert.equal(h.el('tool-view').hidden, true);
 });
 
@@ -417,11 +418,22 @@ test('右键小工具：原位菜单「删除」走 deleteTool', async () => {
   const h = await setup();
   h.navItem('tool:a').fire('contextmenu', { preventDefault() {} });
   const li = h.liOf('tool:a');
-  h.menuAction(li, 3).click();
+  h.menuAction(li, 4).click();
   assert.deepEqual(plain(h.last('deleteTool').payload), { toolId: 'a', deleteStorage: true });
   await h.reply('deleteTool', { ok: true });
   assert.equal(h.requests('launcherList').length, 2);
   assert.equal(h.requests('closeContent').length, 0);
+});
+
+test('右键小工具：创建桌面快捷方式走 createToolShortcut', async () => {
+  const h = await setup();
+  h.navItem('tool:a').fire('contextmenu', { preventDefault() {} });
+  const li = h.liOf('tool:a');
+  h.menuAction(li, 3).click();
+  assert.deepEqual(plain(h.last('createToolShortcut').payload), { toolId: 'a' });
+  await h.reply('createToolShortcut', { path: 'C:\\Desktop\\工具a.lnk', fileName: '工具a.lnk' });
+  assert.match(h.el('toast').textContent, /已创建桌面快捷方式：工具a\.lnk/);
+  assert.equal(h.navItem('tool:a').hidden, false, '成功后菜单应收起并还原条目');
 });
 
 test('右键菜单：详情展开与返回、再右键同一条目收起还原', async () => {
@@ -500,7 +512,7 @@ const renameCancel = (h, li) => renameForm(h, li).children[2].children[1];
 const openRename = h => {
   h.navItem('tool:a').fire('contextmenu', { preventDefault() {} });
   const li = h.liOf('tool:a');
-  h.menuAction(li, 2).click();   /* 详情0 / 属性1 / 重命名2 / 删除3 */
+  h.menuAction(li, 2).click();   /* 详情0 / 属性1 / 重命名2 / 创建桌面快捷方式3 / 删除4 */
   return li;
 };
 
@@ -509,7 +521,7 @@ test('小工具菜单含「重命名」，点击原位展开预填表单', async
   h.navItem('tool:a').fire('contextmenu', { preventDefault() {} });
   const li = h.liOf('tool:a');
   const labels = h.menuOf(li).children[0].children.map(b => b.children[0].textContent);
-  assert.deepEqual(labels, ['详情', '属性', '重命名', '删除']);
+  assert.deepEqual(labels, ['详情', '属性', '重命名', '创建桌面快捷方式', '删除']);
 
   h.menuAction(li, 2).click();
   const menu = h.menuOf(li);
@@ -635,6 +647,15 @@ for (const [view, panel] of [['create', 'create-view'], ['import', 'import-view'
   });
 }
 
+test('内容窗口 view=version 直达版本管理，关闭即收起窗口', async () => {
+  const h = await setup({ mode: 'content', view: 'version', toolId: 'a' });
+  h.view('version-view');
+  assert.equal(h.el('version-title').textContent, '版本管理 · 工具a');
+  await h.reply('listVersions', { versions: [] });
+  h.click('version-close');
+  assert.equal(h.requests('closeContent').length, 1);
+});
+
 test('内容窗口收起/取消都调用 closeContent', async () => {
   const h = await setup({ mode: 'content', view: 'tool', toolId: 'a' });
   await h.embed('a');
@@ -657,6 +678,28 @@ test('内容窗口里 launcher-changed/focus 不触发主窗口式刷新', async
   h.fireWindow('focus');
   await flush();
   assert.equal(h.requests('launcherList').length, 0);
+});
+
+test('内容窗口置顶与钉住开关加载已有状态并可切换', async () => {
+  const h = await setup({ mode: 'content', view: 'tool', toolId: 'a' });
+  await h.reply('getContentWindowState', { topmost: true, pinned: false });
+  await h.embed('a');
+  assert.ok(h.el('tool-topmost').hasClass('active'), '启动时应显示已置顶');
+  assert.ok(!h.el('tool-pinned').hasClass('active'));
+
+  h.click('tool-topmost');
+  assert.deepEqual(plain(h.last('setContentWindowTopmost').payload), { enabled: false });
+  await h.reply('setContentWindowTopmost', { topmost: false, pinned: false });
+  assert.ok(!h.el('tool-topmost').hasClass('active'));
+
+  h.click('tool-pinned');
+  assert.deepEqual(plain(h.last('setContentWindowPinned').payload), { enabled: true });
+  await h.reply('setContentWindowPinned', { topmost: false, pinned: true });
+  assert.ok(h.el('tool-pinned').hasClass('active'));
+
+  h.click('tool-pinned');
+  await h.reply('setContentWindowPinned', { topmost: false, pinned: false });
+  assert.ok(!h.el('tool-pinned').hasClass('active'));
 });
 
 test('版本管理关闭后重新申请内嵌凭证恢复工具', async () => {
@@ -775,7 +818,7 @@ test('AI 创建新一轮清除旧结果和确认', async () => {
   assert.equal(h.requests('createTool').length, 0);
 });
 
-test('创建保存禁用重复点击并内嵌保存后的工具', async () => {
+test('创建保存后打开独立窗口并收起管理窗口', async () => {
   const h = await setup({ mode: 'content', view: 'create' });
   h.el('create-prompt').value = '新工具';
   h.click('create-generate');
@@ -786,11 +829,10 @@ test('创建保存禁用重复点击并内嵌保存后的工具', async () => {
   h.click('create-save');
   assert.equal(h.requests('createTool').length, 1);
   await h.reply('createTool', { toolId: 'c' });
-  assert.equal(h.requests('listTools').length, 2);
-  await h.reply('listTools', { tools: [...tools, { id: 'c', name: '工具c', version: '9.7.5', isValid: true }] });
-  await h.embed('c');
-  h.view('tool-view');
-  assert.match(h.el('tool-meta').textContent, /^v9\.7\.5/);
+  assert.equal(h.requests('openTool').length, 1);
+  assert.deepEqual(plain(h.last('openTool').payload), { toolId: 'c' });
+  await h.reply('openTool', { ok: true });
+  assert.equal(h.requests('closeContent').length, 1);
 });
 
 test('关闭版本管理后忽略旧 AI 更新响应', async () => {
@@ -872,7 +914,10 @@ test('读取文件及导入期间禁用重复提交并锁定审查输入', async
   assert.equal(h.last('importTool').payload.acceptHighSeverity, true);
   await h.reply('importTool', { saved: true, toolId: 'test', toolName: '导入测试' });
   assert.equal(h.el('import-run').disabled, false);
-  assert.equal(h.requests('listTools').length, 2);
+  assert.equal(h.requests('openTool').length, 1);
+  assert.deepEqual(plain(h.last('openTool').payload), { toolId: 'test' });
+  await h.reply('openTool', { ok: true });
+  assert.equal(h.requests('closeContent').length, 1);
 });
 
 for (const id of ['import-name', 'import-desc', 'import-category', 'import-glyph', 'import-file']) {

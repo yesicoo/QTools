@@ -328,6 +328,23 @@
       getManifest: function () { return call("tool.getManifest", null, 10000); }
     },
 
+    /** 独立工具窗口控制（内嵌 iframe 调用会被宿主拒绝）。
+        钉住 = 锁定窗口位置和大小；置顶 = 始终显示在其他窗口之上。 */
+    window: {
+      /** -> { topmost, pinned, chipLeft?, chipTop? } */
+      getState: function () { return call("window.getState", null, 10000); },
+      /** enabled=true 时窗口置顶 -> { topmost, pinned } */
+      setTopmost: function (enabled) { return call("window.setTopmost", { enabled: !!enabled }, 10000); },
+      /** enabled=true 时锁定窗口位置和大小 -> { topmost, pinned } */
+      setPinned: function (enabled) { return call("window.setPinned", { enabled: !!enabled }, 10000); },
+      /** 打开本工具的版本管理（宿主管理窗口）-> { ok } */
+      openVersionManager: function () { return call("window.openVersionManager", null, 15000); },
+      /** 保存「⋯」按钮位置（按工具记忆，下次打开恢复）-> { topmost, pinned, chipLeft, chipTop } */
+      saveChipPosition: function (left, top) {
+        return call("window.saveChipPosition", { left: left, top: top }, 10000);
+      }
+    },
+
     files: {
       /** { name, dataBase64, contentType? } -> { name, sizeBytes, url }（需 files 权限） */
       save: function (p) { return call("files.save", p, 120000); },
@@ -343,9 +360,11 @@
      * 宿主管理界面专用（仅 toolId == "__host__" 可用，其他工具调用一律 PERMISSION_DENIED）。
      * 方法：manager.getServerInfo / listTools / openTool / deleteTool / getAiConfig / setAiConfig
      *      / generateTool / createTool / fixTool / renameTool / openSettings / importTool
+     *      / createToolShortcut（小工具桌面快捷方式，Windows；直接指向 QTools.exe --open-tool <id>）
      *      / listVersions / switchVersion / deleteVersion / generateUpdate / applyUpdate
      *      / listApps / launchApp / addApp / deleteApp / discoverPrograms / pickProgram
      *      / launcherList / reindexPrograms / openContent / closeContent
+     *      / getContentWindowState / setContentWindowTopmost / setContentWindowPinned（内容窗口置顶/钉住）
      *      / addWebTool / deleteWebTool / renameWebTool / openWebTool（在线工具：录入网址 → 独立窗口在线打开）
      *      / hideProgram / unhideProgram（索引程序从列表隐藏 / 恢复显示）
      *      / revealItem（在文件管理器中定位条目所在位置）

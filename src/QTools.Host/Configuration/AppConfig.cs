@@ -51,7 +51,8 @@ public sealed record BackupConfigSection(
 
 /// <summary>
 /// 壳配置：全局热键（Alt+Space 呼出/隐藏主窗口，仅 Windows）、主窗口尺寸（DIP，null = 340×720）、
-/// 托盘快捷菜单数量（1–20，默认 10），以及内容窗口上次的位置（物理像素）与尺寸（DIP）。
+/// 托盘快捷菜单数量（1–20，默认 10）、内容窗口上次的位置（Windows 物理像素，其他平台为 Photino 坐标）
+/// 与尺寸（DIP），以及内容窗口/独立工具窗口的置顶与钉住偏好。
 /// </summary>
 public sealed record ShellConfigSection(
     bool HotkeyEnabled = true,
@@ -61,4 +62,21 @@ public sealed record ShellConfigSection(
     int? ContentWindowLeft = null,
     int? ContentWindowTop = null,
     int? ContentWindowWidth = null,
-    int? ContentWindowHeight = null);
+    int? ContentWindowHeight = null,
+    bool ContentWindowTopmost = false,
+    bool ContentWindowPinned = false,
+    Dictionary<string, ToolWindowState>? ToolWindowStates = null);
+
+/// <summary>
+/// 独立工具窗口偏好：置顶、钉住、「⋯」按钮在窗口内的位置（DIP），
+/// 以及上次的位置（Windows 物理像素，其他平台为 Photino 坐标）与尺寸（DIP），按 toolId 分别记忆。
+/// </summary>
+public sealed record ToolWindowState(
+    bool Topmost = false,
+    bool Pinned = false,
+    double? ChipLeft = null,
+    double? ChipTop = null,
+    int? Left = null,
+    int? Top = null,
+    int? Width = null,
+    int? Height = null);
