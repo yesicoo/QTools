@@ -43,8 +43,10 @@ public sealed class BridgeDispatcher
     private readonly Launcher.ProgramIndex? _programIndex;
     private readonly Launcher.UsageStore? _usage;
     private readonly Launcher.HiddenProgramStore? _hiddenPrograms;
+    private readonly Launcher.PinnedItemStore? _pinnedItems;
     private readonly Backup.BackupService? _backup;
     private readonly Backup.GitBackup? _gitBackup;
+    private readonly Backup.ItemPackageService? _itemPackages;
 
     /// <summary>正在执行的请求 → 取消令牌源（manager.cancelRequest 按 id 取消）。</summary>
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, System.Threading.CancellationTokenSource> _pendingRequests =
@@ -76,7 +78,9 @@ public sealed class BridgeDispatcher
         Launcher.UsageStore? usage = null,
         Launcher.WebToolRegistry? webTools = null,
         Launcher.WebToolStore? webToolStore = null,
-        Launcher.HiddenProgramStore? hiddenPrograms = null)
+        Launcher.HiddenProgramStore? hiddenPrograms = null,
+        Launcher.PinnedItemStore? pinnedItems = null,
+        Backup.ItemPackageService? itemPackages = null)
     {
         _tools = tools;
         _storage = storage;
@@ -95,6 +99,8 @@ public sealed class BridgeDispatcher
         _programIndex = programIndex;
         _usage = usage;
         _hiddenPrograms = hiddenPrograms;
+        _pinnedItems = pinnedItems;
+        _itemPackages = itemPackages;
         RegisterMethods();
     }
 
@@ -190,6 +196,10 @@ public sealed class BridgeDispatcher
         Register("manager.hideProgram", LauncherMethods.HideProgramAsync, null, hostOnly: true);
         Register("manager.unhideProgram", LauncherMethods.UnhideProgramAsync, null, hostOnly: true);
         Register("manager.revealItem", LauncherMethods.RevealItemAsync, null, hostOnly: true);
+        Register("manager.setItemPinned", LauncherMethods.SetItemPinnedAsync, null, hostOnly: true);
+        Register("manager.exportItem", ItemPackageMethods.ExportItemAsync, null, hostOnly: true);
+        Register("manager.pickImportFile", ItemPackageMethods.PickImportFileAsync, null, hostOnly: true);
+        Register("manager.importItemPackage", ItemPackageMethods.ImportItemPackageAsync, null, hostOnly: true);
         Register("manager.getContentWindowState", ContentWindowMethods.GetStateAsync, null, hostOnly: true);
         Register("manager.setContentWindowTopmost", ContentWindowMethods.SetTopmostAsync, null, hostOnly: true);
         Register("manager.setContentWindowPinned", ContentWindowMethods.SetPinnedAsync, null, hostOnly: true);
@@ -212,6 +222,12 @@ public sealed class BridgeDispatcher
         Register("manager.gitRestore", BackupMethods.GitRestoreAsync, null, hostOnly: true);
         Register("manager.setHotkeyEnabled", ShellMethods.SetHotkeyEnabledAsync, null, hostOnly: true);
         Register("manager.setTrayMenuItems", ShellMethods.SetTrayMenuItemsAsync, null, hostOnly: true);
+        Register("manager.getTheme", AppearanceMethods.GetThemeAsync, null, hostOnly: true);
+        Register("manager.setTheme", AppearanceMethods.SetThemeAsync, null, hostOnly: true);
+        Register("manager.notify", AppearanceMethods.NotifyAsync, null, hostOnly: true);
+
+        // 只读主题查询：工具页面也要适配深浅色（不含任何敏感信息，所有工具可用）
+        Register("theme.get", AppearanceMethods.GetThemeAsync, null, hostOnly: false);
         Register("manager.openContent", ShellMethods.OpenContentAsync, null, hostOnly: true);
         Register("manager.closeContent", ShellMethods.CloseContentAsync, null, hostOnly: true);
         Register("manager.trayMenuList", ShellMethods.TrayMenuListAsync, null, hostOnly: true);
@@ -359,8 +375,10 @@ public sealed class BridgeDispatcher
                 ProgramIndex = _programIndex,
                 Usage = _usage,
                 HiddenPrograms = _hiddenPrograms,
+                PinnedItems = _pinnedItems,
                 Backup = _backup,
                 GitBackup = _gitBackup,
+                ItemPackages = _itemPackages,
                 CancellationToken = cts.Token,
                 PushDelta = push is null ? null : (delta, reasoning) => push(BuildStreamChunk(requestId, delta, reasoning)),
                 CancelRequest = CancelPendingRequest,

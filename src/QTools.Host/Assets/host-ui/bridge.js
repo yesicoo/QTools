@@ -328,6 +328,13 @@
       getManifest: function () { return call("tool.getManifest", null, 10000); }
     },
 
+    /** 界面主题（所有页面可用）：-> { theme, dark }。
+        theme = "system" / "light" / "dark"；dark 为当前实际是否深色。
+        工具页面可据此切换自身配色（宿主注入的 tool-theme.js 已自动处理 data-theme）。 */
+    theme: {
+      get: function () { return call("theme.get", null, 10000); }
+    },
+
     /** 独立工具窗口控制（内嵌 iframe 调用会被宿主拒绝）。
         钉住 = 锁定窗口位置和大小；置顶 = 始终显示在其他窗口之上。 */
     window: {
@@ -368,15 +375,20 @@
      *      / addWebTool / deleteWebTool / renameWebTool / openWebTool（在线工具：录入网址 → 独立窗口在线打开）
      *      / hideProgram / unhideProgram（索引程序从列表隐藏 / 恢复显示）
      *      / revealItem（在文件管理器中定位条目所在位置）
+     *      / setItemPinned（列表置顶 / 取消置顶，只影响排序）
+     *      / exportItem / pickImportFile / importItemPackage（单条目 .qtools 导出 / 选择 / 导入包）
      *      / embedTool（签发内嵌凭证，返回带 ?bt= 的工具 URL 供 iframe 内嵌）
      *      / listBackups / createBackup / restoreBackup / deleteBackup / importBackupFile
      *      / openBackupDirectory / getBackupConfig / setBackupConfig / gitPush / gitRestore
      *      / setHotkeyEnabled / setTrayMenuItems / cancelRequest
+     *      / getTheme / setTheme（界面主题 system / light / dark）
+     *      / notify（系统通知：{ title, body?, level?: "info"|"warning"|"error" }，仅 Windows）
      *      / trayMenuList / trayMenuReady / hideTrayMenu / exitApp（托盘弹层：前五项 / 就绪 / 收起 / 退出）
      */
     callManager: function (method, payload) {
       var long = ["manager.generateTool", "manager.generateUpdate", "manager.fixTool",
-        "manager.pickProgram", "manager.gitPush", "manager.gitRestore", "manager.importBackupFile"];
+        "manager.pickProgram", "manager.gitPush", "manager.gitRestore", "manager.importBackupFile",
+        "manager.exportItem", "manager.pickImportFile", "manager.importItemPackage"];
       var medium = ["manager.createBackup", "manager.restoreBackup"];
       var timeout = long.indexOf(method) >= 0 ? AI_TIMEOUT_MS
         : medium.indexOf(method) >= 0 ? 300000 : 30000;

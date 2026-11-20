@@ -1,5 +1,6 @@
+/* 主题跟随设置（data-theme 由宿主注入 / theme.js 实时切换），无属性时跟随系统 */
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
   --panel: #ffffff;
   --text: #181b20;
   --faint: #9aa1ab;
@@ -11,8 +12,22 @@
   --border: #e6e8ec;
 }
 
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --panel: #181b21;
+  --text: #e8eaed;
+  --faint: #6b7280;
+  --accent: #818cf8;
+  --accent-strong: #a5b4fc;
+  --accent-soft: #232741;
+  --danger: #f87171;
+  --warn-bg: #3b1518;
+  --border: #272b33;
+}
+
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme]) {
+    color-scheme: dark;
     --panel: #181b21;
     --text: #e8eaed;
     --faint: #6b7280;

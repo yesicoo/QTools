@@ -403,7 +403,8 @@ internal static class LauncherMethods
             context.Usage,
             Configuration.AppPaths.IconCacheDirectory,
             context.WebTools,
-            context.HiddenPrograms);
+            context.HiddenPrograms,
+            context.PinnedItems);
 
         return System.Threading.Tasks.Task.FromResult(JsonSerializer.SerializeToElement(
             view, AppJsonContext.Default.LauncherListView));
@@ -671,6 +672,113 @@ internal static class LauncherMethods
         return System.Threading.Tasks.Task.FromResult(JsonSerializer.SerializeToElement(
             new OkResult(true), AppJsonContext.Default.OkResult));
     }
+
+    /// <summary>右键「置顶 / 取消置顶」：只影响统一列表排序（置顶条目始终在最前），不改窗口状态。</summary>
+    public static System.Threading.Tasks.Task<JsonElement> SetItemPinnedAsync(BridgeContext context)
+    {
+        var kind = PayloadReader.ReadStringPayload(context.Payload, "kind", required: true, maxLength: 15);
+        var id = PayloadReader.ReadStringPayload(context.Payload, "id", required: true, maxLength: 63);
+        if (context.PinnedItems is null)
+        {
+            throw new BridgeException("INTERNAL_ERROR", "置顶记录未就绪");
+        }
+
+        if (kind is not (LauncherListBuilder.KindTool or LauncherListBuilder.KindApp or LauncherListBuilder.KindWeb))
+        {
+            throw new BridgeException("BRIDGE_BAD_REQUEST", $"不支持置顶的类型 '{kind}'（本机程序由系统索引决定展示）");
+        }
+
+        var root = PayloadReader.RequireObject(context.Payload);
+        if (!root.TryGetProperty("pinned", out var pinnedElement) ||
+            pinnedElement.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+        {
+            throw new BridgeException("BRIDGE_BAD_REQUEST", "payload.pinned 必填且为布尔值");
+        }
+
+        var pinned = pinnedElement.ValueKind == JsonValueKind.True;
+        var changed = context.PinnedItems.SetPinned(kind, id, pinned);
+        context.Shell?.NotifyLauncherChanged();
+        return System.Threading.Tasks.Task.FromResult(JsonSerializer.SerializeToElement(
+            new OkResult(changed), AppJsonContext.Default.OkResult));
+    }
+}
+
+/// <summary>单条目导出 / 导入包（manager.exportItem / pickImportFile / importItemPackage，仅宿主管理界面可用）。</summary>
+internal static class ItemPackageMethods
+{
+    private static Backup.ItemPackageService RequireService(BridgeContext context)
+    {
+        if (context.ItemPackages is null)
+        {
+            throw new BridgeException("INTERNAL_ERROR", "导出包服务未就绪");
+        }
+
+        return context.ItemPackages;
+    }
+
+    /// <summary>右键「导出」：弹原生保存对话框，把当前运行版本打成 .qtools 包。</summary>
+    public static async System.Threading.Tasks.Task<JsonElement> ExportItemAsync(BridgeContext context)
+    {
+        var kind = PayloadReader.ReadStringPayload(context.Payload, "kind", required: true, maxLength: 15);
+        var id = PayloadReader.ReadStringPayload(context.Payload, "id", required: true, maxLength: 63);
+
+        if (context.Shell is null)
+        {
+            throw new BridgeException("INTERNAL_ERROR", "宿主壳未就绪");
+        }
+
+        var service = RequireService(context);
+        var defaultName = service.GetDefaultFileName(kind, id);
+        var picked = await context.Shell.PickExportFileAsync(defaultName).ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(picked))
+        {
+            return JsonSerializer.SerializeToElement(
+                new Backup.ItemExportResult(null, null, 0), AppJsonContext.Default.ItemExportResult);
+        }
+
+        var result = service.Export(kind, id, picked);
+        return JsonSerializer.SerializeToElement(result, AppJsonContext.Default.ItemExportResult);
+    }
+
+    /// <summary>导入页「选择文件」：HTML 读回内容（走既有审查流程），导出包返回元数据。</summary>
+    public static async System.Threading.Tasks.Task<JsonElement> PickImportFileAsync(BridgeContext context)
+    {
+        if (context.Shell is null)
+        {
+            throw new BridgeException("INTERNAL_ERROR", "宿主壳未就绪");
+        }
+
+        var picked = await context.Shell.PickImportFileAsync().ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(picked))
+        {
+            return JsonSerializer.SerializeToElement(
+                new Backup.PickedImportFileView(null, null, string.Empty, null, null, null, null),
+                AppJsonContext.Default.PickedImportFileView);
+        }
+
+        var view = RequireService(context).Inspect(picked);
+        return JsonSerializer.SerializeToElement(view, AppJsonContext.Default.PickedImportFileView);
+    }
+
+    /// <summary>导入选中的导出包（小工具高危项需 acceptHighSeverity=true 二次确认）。</summary>
+    public static async System.Threading.Tasks.Task<JsonElement> ImportItemPackageAsync(BridgeContext context)
+    {
+        var path = PayloadReader.ReadStringPayload(context.Payload, "path", required: true, maxLength: 1000);
+        var payload = PayloadReader.RequireObject(context.Payload);
+        var accept = payload.TryGetProperty("acceptHighSeverity", out var acceptElement) &&
+                     acceptElement.ValueKind == JsonValueKind.True;
+
+        var result = await RequireService(context)
+            .ImportPackageAsync(path, accept, context.CancellationToken)
+            .ConfigureAwait(false);
+
+        if (result.Saved)
+        {
+            context.Usage?.EnsureSeeded(new[] { result.ItemId });
+        }
+
+        return JsonSerializer.SerializeToElement(result, AppJsonContext.Default.ImportItemResult);
+    }
 }
 
 /// <summary>files.* 方法实现（权限：files）。二进制文件存取，按 toolId 隔离在 tools/{id}/files/。</summary>
@@ -743,6 +851,77 @@ internal static class SettingsMethods
 
         await context.Shell.OpenSettingsAsync().ConfigureAwait(false);
         return JsonSerializer.SerializeToElement(new OkResult(true), AppJsonContext.Default.OkResult);
+    }
+}
+
+/// <summary>外观与系统通知（仅宿主管理界面）：界面主题切换、托盘气泡通知。</summary>
+internal static class AppearanceMethods
+{
+    /// <summary>manager.getTheme（宿主页面）与 theme.get（工具页面）共用的只读查询。</summary>
+    public static System.Threading.Tasks.Task<JsonElement> GetThemeAsync(BridgeContext context)
+    {
+        var config = QTools.Host.Ai.ConfigStore.Load(QTools.Host.Configuration.AppPaths.ConfigFilePath);
+        var theme = Configuration.ThemeSetting.Normalize(config.Shell?.Theme);
+        return System.Threading.Tasks.Task.FromResult(
+            JsonSerializer.SerializeToElement(
+                NewThemeView(theme), AppJsonContext.Default.ThemeView));
+    }
+
+    private static ThemeView NewThemeView(string theme) => new(theme)
+    {
+        Dark = Configuration.ThemeSetting.IsDarkNow(theme),
+    };
+
+    public static System.Threading.Tasks.Task<JsonElement> SetThemeAsync(BridgeContext context)
+    {
+        var theme = PayloadReader.ReadStringPayload(context.Payload, "theme", required: true, maxLength: 10);
+        if (theme is not ("system" or "light" or "dark"))
+        {
+            throw new BridgeException("BRIDGE_BAD_REQUEST", "theme 必须是 system / light / dark");
+        }
+
+        var config = QTools.Host.Ai.ConfigStore.Load(QTools.Host.Configuration.AppPaths.ConfigFilePath);
+        var shell = config.Shell ?? new Configuration.ShellConfigSection();
+        QTools.Host.Ai.ConfigStore.Save(
+            QTools.Host.Configuration.AppPaths.ConfigFilePath,
+            config with { Shell = shell with { Theme = theme } });
+
+        context.Shell?.NotifyThemeChanged(theme);
+        Log.Info($"界面主题已切换为 {theme}");
+        return System.Threading.Tasks.Task.FromResult(
+            JsonSerializer.SerializeToElement(
+                NewThemeView(theme), AppJsonContext.Default.ThemeView));
+    }
+
+    /// <summary>弹出一条系统通知（Windows 托盘气泡；进入通知中心）。供定时任务等场景使用。</summary>
+    public static System.Threading.Tasks.Task<JsonElement> NotifyAsync(BridgeContext context)
+    {
+        var title = PayloadReader.ReadStringPayload(context.Payload, "title", required: true, maxLength: 64).Trim();
+        if (title.Length == 0)
+        {
+            throw new BridgeException("BRIDGE_BAD_REQUEST", "payload.title 不能为空");
+        }
+
+        var body = PayloadReader.ReadStringPayload(context.Payload, "body", required: false, maxLength: 256).Trim();
+        var levelText = PayloadReader.ReadStringPayload(context.Payload, "level", required: false, maxLength: 16);
+        var level = levelText switch
+        {
+            "" or "info" => Shell.TrayNotificationLevel.Info,
+            "warning" => Shell.TrayNotificationLevel.Warning,
+            "error" => Shell.TrayNotificationLevel.Error,
+            _ => throw new BridgeException("BRIDGE_BAD_REQUEST", "level 必须是 info / warning / error"),
+        };
+
+        if (context.Shell is null || !context.Shell.Notify(title, body, level))
+        {
+            throw new BridgeException(
+                "NOTIFY_UNAVAILABLE",
+                "系统通知不可用（仅 Windows 且托盘图标可用时支持）");
+        }
+
+        Log.Info($"已发送系统通知：{title}");
+        return System.Threading.Tasks.Task.FromResult(
+            JsonSerializer.SerializeToElement(new OkResult(true), AppJsonContext.Default.OkResult));
     }
 }
 

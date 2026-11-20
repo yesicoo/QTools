@@ -27,7 +27,7 @@ namespace QTools.Host.Server;
 internal sealed partial class LocalServer : IDisposable
 {
     private const string HostUiPrefix = "/__host__";
-    private const long MaxHtmlBytes = 1024 * 1024;
+    private const long MaxHtmlBytes = 8 * 1024 * 1024;
     private const long MaxRequestBodyBytes = 1024 * 1024;
     private const long MaxFileBytes = 8 * 1024 * 1024;
 
@@ -88,11 +88,17 @@ internal sealed partial class LocalServer : IDisposable
     /// <summary>索引程序隐藏列表（右键「从列表隐藏」）。</summary>
     public Launcher.HiddenProgramStore HiddenPrograms { get; }
 
+    /// <summary>列表置顶记录（右键「置顶」）。</summary>
+    public Launcher.PinnedItemStore PinnedItems { get; }
+
     /// <summary>本地备份服务。</summary>
     public Backup.BackupService Backup { get; }
 
     /// <summary>Git 远程备份。</summary>
     public Backup.GitBackup GitBackup { get; }
+
+    /// <summary>单条目导出/导入包（小工具当前运行版本 / 启动项 / 在线工具）。</summary>
+    public Backup.ItemPackageService ItemPackages { get; }
 
     /// <summary>宿主配置。</summary>
     public Configuration.AppConfig Config { get; }
@@ -124,6 +130,8 @@ internal sealed partial class LocalServer : IDisposable
         Usage = new Launcher.UsageStore(QTools.Host.Configuration.AppPaths.UsageFilePath);
         HiddenPrograms = new Launcher.HiddenProgramStore(
             QTools.Host.Configuration.AppPaths.HiddenProgramsFilePath);
+        PinnedItems = new Launcher.PinnedItemStore(
+            QTools.Host.Configuration.AppPaths.PinnedItemsFilePath);
 
         var webToolsRoot = QTools.Host.Configuration.AppPaths.WebToolsDirectory;
         WebTools = new Launcher.WebToolRegistry(webToolsRoot);
@@ -135,10 +143,15 @@ internal sealed partial class LocalServer : IDisposable
             Backup,
             QTools.Host.Configuration.AppPaths.RootDirectory,
             QTools.Host.Configuration.AppPaths.DataDirectory);
+        ItemPackages = new Backup.ItemPackageService(
+            Tools, Importer, Apps, AppStore, WebTools, WebToolStore,
+            QTools.Host.Configuration.AppPaths.RootDirectory,
+            QTools.Host.Configuration.AppPaths.ImportStagingDirectory);
 
         Dispatcher = new BridgeDispatcher(
             Tools, Storage, Ai, Secrets, Creator, Importer, Apps, Launcher, AppStore, Discovery,
-            Backup, GitBackup, ProgramIndex, Usage, WebTools, WebToolStore, HiddenPrograms);
+            Backup, GitBackup, ProgramIndex, Usage, WebTools, WebToolStore, HiddenPrograms, PinnedItems,
+            ItemPackages);
     }
 
     public int Port => _port;
@@ -338,7 +351,24 @@ internal sealed partial class LocalServer : IDisposable
         }
 
         var html = await new StreamReader(buffer, Encoding.UTF8, detectEncodingFromByteOrderMarks: true).ReadToEndAsync();
-        var transformed = HtmlRewriter.InjectBridgeScript(html, ToolIdOf(context.Request.Path), AppInfo.Version);
+        var toolId = ToolIdOf(context.Request.Path);
+        var theme = QTools.Host.Configuration.ThemeSetting.Normalize(
+            QTools.Host.Ai.ConfigStore.Load(QTools.Host.Configuration.AppPaths.ConfigFilePath).Shell?.Theme);
+
+        var transformed = HtmlRewriter.InjectBridgeScript(html, toolId, AppInfo.Version);
+        if (toolId == "__host__")
+        {
+            // 宿主页面：只注入显式主题，首屏即正确配色（system 交给 CSS 媒体查询）
+            transformed = HtmlRewriter.InjectThemeAttribute(
+                transformed, QTools.Host.Configuration.ThemeSetting.Explicit(theme));
+        }
+        else
+        {
+            // 工具页面：窗口控制条 + 主题契约（data-theme / 旧工具反色兜底 / 实时切换脚本）
+            transformed = HtmlRewriter.InjectWindowControlsScript(transformed);
+            transformed = HtmlRewriter.InjectToolTheme(
+                transformed, theme, QTools.Host.Configuration.ThemeSetting.IsDarkNow(theme));
+        }
 
         var bytes = Encoding.UTF8.GetBytes(transformed);
         context.Response.ContentLength = bytes.Length;

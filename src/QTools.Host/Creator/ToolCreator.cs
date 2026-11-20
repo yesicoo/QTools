@@ -92,6 +92,14 @@ public sealed class ToolCreator
         5. window.host 由宿主注入，页面可直接使用；不要自己定义或引用其他桥接对象。
         6. 单文件 HTML（全部 CSS/JS 内联，目的：支持宿主的导入/导出与备份）、无构建步骤；
            允许引用 CDN 或外部资源，允许 fetch/XHR/WebSocket 访问外部接口，请求失败时要有降级提示。
+        7. 必须同时适配宿主浅色 / 深色主题（宿主会在 <html> 上注入 data-theme="light|dark"，跟随系统时不注入）。
+           用 CSS 变量定义两套颜色，按以下模式写样式，body / 输入框 / 按钮 / 卡片等所有背景与文字颜色都走变量，
+           禁止写死单一浅色配色（否则深色下不可用）：
+           :root { color-scheme: light; --bg:#f7f8fa; --text:#181b20; }
+           :root[data-theme="dark"] { color-scheme: dark; --bg:#101216; --text:#e8eaed; }
+           @media (prefers-color-scheme: dark) {
+             :root:not([data-theme]) { color-scheme: dark; --bg:#101216; --text:#e8eaed; }
+           }
         """;
 
     public ToolCreator(Ai.AiClient ai, ToolRegistry registry)
@@ -252,6 +260,8 @@ public sealed class ToolCreator
         5. 布局自适应 manifest.window 声明的尺寸并随窗口缩放；window.width/height 必须是 320~3840 的整数（常用 520×720、resizable=true）。
         6. permissions 按实际用量最小化声明；allowEval 固定 false、csp 固定 null。
         7. 交互完整：输入校验、空态、成功/失败反馈都要有，错误不静默。
+        8. 界面必须适配宿主深浅主题：CSS 变量 + :root[data-theme="dark"] + prefers-color-scheme 兜底（见系统提示第 7 条），
+           禁止只写一套浅色配色。
 
         【我的需求】
         """;

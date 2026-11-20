@@ -47,6 +47,7 @@ namespace QTools.Host.Serialization;
 [JsonSerializable(typeof(Launcher.WebToolEntry))]
 [JsonSerializable(typeof(Launcher.AddWebToolPayload))]
 [JsonSerializable(typeof(Launcher.HiddenProgramFile))]
+[JsonSerializable(typeof(Launcher.PinnedItemFile))]
 [JsonSerializable(typeof(Launcher.AppListItemView))]
 [JsonSerializable(typeof(Launcher.AppListView))]
 [JsonSerializable(typeof(Launcher.DiscoveredProgramView))]
@@ -73,6 +74,10 @@ namespace QTools.Host.Serialization;
 [JsonSerializable(typeof(Backup.BackupListView))]
 [JsonSerializable(typeof(Backup.BackupConfigView))]
 [JsonSerializable(typeof(Backup.ImportBackupResult))]
+[JsonSerializable(typeof(Backup.ItemExportManifest))]
+[JsonSerializable(typeof(Backup.ItemExportResult))]
+[JsonSerializable(typeof(Backup.PickedImportFileView))]
+[JsonSerializable(typeof(Backup.ImportItemResult))]
 [JsonSerializable(typeof(Backup.GitPushResult))]
 [JsonSerializable(typeof(Ai.AiChatRequest))]
 [JsonSerializable(typeof(Ai.AiMessage))]
@@ -95,6 +100,8 @@ namespace QTools.Host.Serialization;
 [JsonSerializable(typeof(GeneratedToolView))]
 [JsonSerializable(typeof(CreateToolResult))]
 [JsonSerializable(typeof(EmbedToolView))]
+[JsonSerializable(typeof(ThemeView))]
+[JsonSerializable(typeof(Launcher.SingleInstanceMessage))]
 internal partial class AppJsonContext : JsonSerializerContext;
 
 /// <summary>/health 响应。</summary>
@@ -170,3 +177,9 @@ internal sealed record EmbedToolView(
     string Name,
     string Url,
     IReadOnlyList<string> Permissions);
+
+/// <summary>界面主题视图（manager.getTheme / theme.get）：system / light / dark，Dark 为当前实际是否深色。</summary>
+internal sealed record ThemeView(string Theme)
+{
+    public bool Dark { get; init; }
+}

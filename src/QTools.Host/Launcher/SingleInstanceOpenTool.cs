@@ -1,13 +1,26 @@
 using System.IO.Pipes;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.Json;
 using QTools.Host.Logging;
+using QTools.Host.Serialization;
 using QTools.Host.Tools;
 
 namespace QTools.Host.Launcher;
 
+/// <summary>第二实例经命名管道转交给主实例的请求（一行 JSON）。</summary>
+public sealed record SingleInstanceMessage(
+    string Cmd,
+    string? Id = null,
+    string? Title = null,
+    string? Body = null)
+{
+    public const string OpenToolCommand = "open-tool";
+    public const string NotifyCommand = "notify";
+}
+
 /// <summary>
-/// 单实例转发：桌面快捷方式带 --open-tool 二次启动时，把工具 Id 经命名管道交给已在运行的实例。
+/// 单实例转发：桌面快捷方式/命令行二次启动时，把请求经命名管道交给已在运行的实例。
 /// <para>
 /// 主实例在消息循环启动前开始监听；管道用 CurrentUserOnly 限制同用户访问。
 /// 仅 Windows 启用——其他平台返回 false / null，单实例保护本身不受影响。
@@ -20,24 +33,35 @@ public static class SingleInstanceOpenTool
     public static bool IsSupported => OperatingSystem.IsWindows();
 
     /// <summary>启动监听（主实例）；返回可释放句柄，非 Windows 返回 null。</summary>
-    public static IDisposable? StartListener(Func<string, Task<bool>> handler)
+    public static IDisposable? StartListener(Func<SingleInstanceMessage, Task<bool>> handler)
     {
         return IsSupported ? new Listener(handler) : null;
     }
 
-    /// <summary>把打开工具的请求转发给已运行实例（第二实例）；成功返回 true。</summary>
-    public static bool TryForward(string toolId, TimeSpan timeout)
+    /// <summary>把请求转发给已运行实例（第二实例）；成功返回 true。</summary>
+    public static bool TryForward(SingleInstanceMessage message, TimeSpan timeout)
     {
-        if (!IsSupported || !ToolManifestValidator.ToolIdPattern().IsMatch(toolId))
+        if (!IsSupported)
         {
             return false;
         }
 
-        return TryForwardAsync(toolId, timeout).GetAwaiter().GetResult();
+        if (message.Cmd == SingleInstanceMessage.OpenToolCommand &&
+            (string.IsNullOrWhiteSpace(message.Id) || !ToolManifestValidator.ToolIdPattern().IsMatch(message.Id)))
+        {
+            return false;
+        }
+
+        if (message.Cmd == SingleInstanceMessage.NotifyCommand && string.IsNullOrWhiteSpace(message.Title))
+        {
+            return false;
+        }
+
+        return TryForwardAsync(message, timeout).GetAwaiter().GetResult();
     }
 
     /// <summary>转发失败时给出可见提示——快捷方式没有控制台，静默失败等于「点了没反应」。</summary>
-    public static void ShowForwardFailure(string toolId)
+    public static void ShowForwardFailure(string action)
     {
         if (!IsSupported)
         {
@@ -46,7 +70,7 @@ public static class SingleInstanceOpenTool
 
         _ = MessageBoxW(
             IntPtr.Zero,
-            $"QTools 已在运行，但打开工具的请求转发失败。\n请从托盘退出 QTools 后重试（工具：{toolId}）。",
+            $"QTools 已在运行，但{action}的请求转发失败。\n请从托盘退出 QTools 后重试。",
             "QTools",
             0x00000030u); // MB_ICONWARNING
     }
@@ -54,8 +78,10 @@ public static class SingleInstanceOpenTool
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern int MessageBoxW(IntPtr hWnd, string text, string caption, uint type);
 
-    private static async Task<bool> TryForwardAsync(string toolId, TimeSpan timeout)
+    private static async Task<bool> TryForwardAsync(SingleInstanceMessage message, TimeSpan timeout)
     {
+        var payload = JsonSerializer.Serialize(message, AppJsonContext.Default.SingleInstanceMessage);
+
         var deadline = DateTime.UtcNow + timeout;
         while (DateTime.UtcNow < deadline)
         {
@@ -69,14 +95,14 @@ public static class SingleInstanceOpenTool
                 }
 
                 await using (var writer = new StreamWriter(
-                    client, new UTF8Encoding(false), 256, leaveOpen: true))
+                    client, new UTF8Encoding(false), 512, leaveOpen: true))
                 {
-                    await writer.WriteLineAsync(toolId).ConfigureAwait(false);
+                    await writer.WriteLineAsync(payload).ConfigureAwait(false);
                     await writer.FlushAsync().ConfigureAwait(false);
                 }
 
                 using var read = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-                using var reader = new StreamReader(client, Encoding.UTF8, false, 256, leaveOpen: true);
+                using var reader = new StreamReader(client, Encoding.UTF8, false, 512, leaveOpen: true);
                 var reply = await reader.ReadLineAsync(read.Token).ConfigureAwait(false);
                 return string.Equals(reply, "OK", StringComparison.Ordinal);
             }
@@ -104,12 +130,13 @@ public static class SingleInstanceOpenTool
         private readonly CancellationTokenSource _cts = new();
         private readonly Task _loop;
 
-        public Listener(Func<string, Task<bool>> handler)
+        public Listener(Func<SingleInstanceMessage, Task<bool>> handler)
         {
             _loop = Task.Run(() => LoopAsync(handler, _cts.Token));
         }
 
-        private static async Task LoopAsync(Func<string, Task<bool>> handler, CancellationToken token)
+        private static async Task LoopAsync(
+            Func<SingleInstanceMessage, Task<bool>> handler, CancellationToken token)
         {
             while (!token.IsCancellationRequested)
             {
@@ -124,7 +151,7 @@ public static class SingleInstanceOpenTool
                     await server.WaitForConnectionAsync(token).ConfigureAwait(false);
 
                     string? line;
-                    using (var reader = new StreamReader(server, Encoding.UTF8, false, 256, leaveOpen: true))
+                    using (var reader = new StreamReader(server, Encoding.UTF8, false, 512, leaveOpen: true))
                     {
                         line = await reader.ReadLineAsync(token).ConfigureAwait(false);
                     }
@@ -134,7 +161,16 @@ public static class SingleInstanceOpenTool
                     {
                         try
                         {
-                            ok = await handler(line.Trim()).ConfigureAwait(false);
+                            var message = JsonSerializer.Deserialize(
+                                line, AppJsonContext.Default.SingleInstanceMessage);
+                            if (message is not null && !string.IsNullOrWhiteSpace(message.Cmd))
+                            {
+                                ok = await handler(message).ConfigureAwait(false);
+                            }
+                        }
+                        catch (JsonException)
+                        {
+                            Log.Warn("单实例转发：无法解析请求（可能是旧版本客户端）");
                         }
                         catch (Exception ex)
                         {
@@ -143,7 +179,7 @@ public static class SingleInstanceOpenTool
                     }
 
                     await using (var writer = new StreamWriter(
-                        server, new UTF8Encoding(false), 256, leaveOpen: true))
+                        server, new UTF8Encoding(false), 512, leaveOpen: true))
                     {
                         await writer.WriteLineAsync(ok ? "OK" : "ERR").ConfigureAwait(false);
                         await writer.FlushAsync().ConfigureAwait(false);

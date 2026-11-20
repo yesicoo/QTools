@@ -1,8 +1,17 @@
+using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using QTools.Host.Configuration;
 using QTools.Host.Logging;
 
 namespace QTools.Host.Shell;
+
+/// <summary>系统通知级别（映射 Shell_NotifyIcon 的 dwInfoFlags）。</summary>
+public enum TrayNotificationLevel
+{
+    Info = 1,
+    Warning = 2,
+    Error = 3,
+}
 
 /// <summary>
 /// Windows 系统托盘图标：Shell_NotifyIcon + 隐藏消息窗口（独立 STA 消息线程，不占 UI 线程）。
@@ -14,6 +23,7 @@ public sealed class TrayIcon : IDisposable
     public static bool IsSupported => OperatingSystem.IsWindows();
 
     private const int TrayMessage = 0x8000 + 20;
+    private const int ShowNotificationMessage = 0x8000 + 21;
     private const int TrayIconId = 1;
     private const int WmClose = 0x0010;
     private const int WmDestroy = 0x0002;
@@ -21,10 +31,14 @@ public sealed class TrayIcon : IDisposable
     private const int WmLeftButtonDblClk = 0x0203;
     private const int WmRightButtonUp = 0x0205;
     private const int NimAdd = 0;
+    private const int NimModify = 1;
     private const int NimDelete = 2;
     private const int NifMessage = 0x1;
     private const int NifIcon = 0x2;
     private const int NifTip = 0x4;
+    private const int NifInfo = 0x10;
+    private const int MaxInfoTitleLength = 64;
+    private const int MaxInfoLength = 256;
     private const int ImageIcon = 1;
     private const int LrLoadFromFile = 0x10;
     private const int SmCxSmIcon = 49;
@@ -36,6 +50,7 @@ public sealed class TrayIcon : IDisposable
     private readonly Action _onShow;
     private readonly Action _onMenu;
     private readonly ManualResetEventSlim _ready = new(false);
+    private readonly ConcurrentQueue<NotificationRequest> _notifications = new();
 
     private Thread? _thread;
     private IntPtr _window;
@@ -44,6 +59,8 @@ public sealed class TrayIcon : IDisposable
     private WndProcDelegate? _wndProcDelegate;
     private bool _iconAdded;
     private bool _disposed;
+
+    private sealed record NotificationRequest(string Title, string Body, TrayNotificationLevel Level);
 
     private TrayIcon(string tooltip, Action onShow, Action onMenu)
     {
@@ -81,6 +98,21 @@ public sealed class TrayIcon : IDisposable
         }
 
         return tray;
+    }
+
+    /// <summary>
+    /// 弹出一条系统通知（Windows 10/11 显示为右下角通知并进入通知中心）。
+    /// 任意线程可调用；托盘未就绪/已释放时返回 false。标题与正文会按系统上限截断。
+    /// </summary>
+    public bool Notify(string title, string body, TrayNotificationLevel level = TrayNotificationLevel.Info)
+    {
+        if (_disposed || _window == IntPtr.Zero || !_iconAdded)
+        {
+            return false;
+        }
+
+        _notifications.Enqueue(new NotificationRequest(title, body, level));
+        return PostMessageW(_window, ShowNotificationMessage, IntPtr.Zero, IntPtr.Zero);
     }
 
     private void RunMessageLoop()
@@ -168,6 +200,16 @@ public sealed class TrayIcon : IDisposable
             return IntPtr.Zero;
         }
 
+        if (message == ShowNotificationMessage)
+        {
+            while (_notifications.TryDequeue(out var notification))
+            {
+                ShowBalloon(notification);
+            }
+
+            return IntPtr.Zero;
+        }
+
         if (_taskbarCreatedMessage != 0 && message == _taskbarCreatedMessage)
         {
             // 资源管理器重启后托盘图标会消失，需要重新注册
@@ -218,6 +260,33 @@ public sealed class TrayIcon : IDisposable
         var data = CreateIconData();
         Shell_NotifyIconW(NimDelete, ref data);
         _iconAdded = false;
+    }
+
+    /// <summary>在托盘线程弹气泡通知（NIM_MODIFY + NIF_INFO）。</summary>
+    private void ShowBalloon(NotificationRequest request)
+    {
+        var data = CreateIconData();
+        data.uFlags = NifInfo;
+        data.szInfo = Truncate(request.Body, MaxInfoLength);
+        data.szInfoTitle = Truncate(request.Title, MaxInfoTitleLength);
+        data.dwInfoFlags = (int)request.Level;
+        data.uTimeoutOrVersion = 10000;
+        if (!Shell_NotifyIconW(NimModify, ref data))
+        {
+            Log.Warn($"系统通知发送失败：Win32 错误 {Marshal.GetLastWin32Error()}");
+        }
+    }
+
+    /// <summary>按 UTF-16 单元截断，避免把代理对（emoji 等）劈成半个字符。</summary>
+    private static string Truncate(string value, int maxLength)
+    {
+        if (value.Length <= maxLength)
+        {
+            return value;
+        }
+
+        var length = char.IsHighSurrogate(value[maxLength - 1]) ? maxLength - 1 : maxLength;
+        return value[..length];
     }
 
     private NotifyIconData CreateIconData() => new()

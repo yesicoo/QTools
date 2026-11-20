@@ -50,22 +50,30 @@ public sealed record BackupConfigSection(
     string? LastPushStatus);
 
 /// <summary>
-/// 壳配置：全局热键（Alt+Space 呼出/隐藏主窗口，仅 Windows）、主窗口尺寸（DIP，null = 340×720）、
-/// 托盘快捷菜单数量（1–20，默认 10）、内容窗口上次的位置（Windows 物理像素，其他平台为 Photino 坐标）
-/// 与尺寸（DIP），以及内容窗口/独立工具窗口的置顶与钉住偏好。
+/// 壳配置：全局热键（Alt+Space 呼出/隐藏主窗口，仅 Windows）、主窗口上次的位置（Windows 物理像素，
+/// 其他平台为 Photino 坐标）与尺寸（DIP，null = 340×720）、托盘快捷菜单数量（1–20，默认 10）、
+/// 内容窗口/设置窗口上次的位置与尺寸、内容窗口/独立工具窗口的置顶与钉住偏好，
+/// 以及界面主题（system / light / dark）。
 /// </summary>
 public sealed record ShellConfigSection(
     bool HotkeyEnabled = true,
     int? MainWindowWidth = null,
     int? MainWindowHeight = null,
+    int? MainWindowLeft = null,
+    int? MainWindowTop = null,
     int TrayMenuItems = 10,
     int? ContentWindowLeft = null,
     int? ContentWindowTop = null,
     int? ContentWindowWidth = null,
     int? ContentWindowHeight = null,
+    int? SettingsWindowLeft = null,
+    int? SettingsWindowTop = null,
+    int? SettingsWindowWidth = null,
+    int? SettingsWindowHeight = null,
     bool ContentWindowTopmost = false,
     bool ContentWindowPinned = false,
-    Dictionary<string, ToolWindowState>? ToolWindowStates = null);
+    Dictionary<string, ToolWindowState>? ToolWindowStates = null,
+    string Theme = ThemeSetting.System);
 
 /// <summary>
 /// 独立工具窗口偏好：置顶、钉住、「⋯」按钮在窗口内的位置（DIP），

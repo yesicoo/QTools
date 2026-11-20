@@ -194,15 +194,16 @@
         <h2>导入本地 HTML 工具</h2>
         <button id="import-cancel" class="btn ghost sm" type="button">取消</button>
       </div>
-      <p class="hint">选择一个 HTML 文件并给它起个名字。权限会按代码实际用法<b>自动检测</b>，不需要你手动填写。</p>
+      <p class="hint">选择 HTML 文件或 QTools 导出包（.qtools），再给它起个名字。权限会按代码实际用法<b>自动检测</b>，不需要你手动填写。</p>
 
       <div class="form">
-        <label>HTML 文件
+        <label>文件（HTML / 导出包）
           <div class="file-picker">
-            <input id="import-file" type="file" accept=".html,.htm,text/html">
+            <button id="import-pick" class="btn ghost sm" type="button">选择文件</button>
             <span id="import-file-name" class="file-name">未选择文件</span>
           </div>
         </label>
+        <div id="import-package-hint" class="hint" hidden>导出包自带名称、版本、图标等元数据，导入后保持不变。</div>
         <label>工具名称
           <input id="import-name" type="text" maxlength="60" placeholder="例如：我的计算器">
         </label>
@@ -274,6 +275,7 @@
 </div>
 
 <div id="toast" class="toast" hidden></div>
+<script src="/__host__/theme.js" defer></script>
 <script src="/__host__/app.js" defer></script>
 </body>
 </html>

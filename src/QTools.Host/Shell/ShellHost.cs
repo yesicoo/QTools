@@ -50,6 +50,9 @@ public sealed class ShellHost
 
     private const int TrayMenuWidth = 288;
 
+    /// <summary>设置窗口在窗口表中的键（与 toolId 同一命名空间）。</summary>
+    private const string SettingsWindowKey = "__settings__";
+
     /// <summary>刚显示的弹层可能因前台锁拿不到焦点而立刻触发失焦，这段宽限期内忽略收起。</summary>
     private const int TrayMenuDeactivateGraceMs = 800;
 
@@ -62,11 +65,14 @@ public sealed class ShellHost
     /// <summary>托盘菜单条目提供者（组合根注入统一列表前五项，每次打开实时读取）。</summary>
     public Func<IReadOnlyList<TrayEntry>>? TrayEntriesProvider { get; set; }
 
-    /// <summary>主窗口尺寸保存防抖序号（连续拖动时只在停下约 500ms 后落一次盘）。</summary>
-    private long _mainWindowSizeSaveSerial;
+    /// <summary>主窗口位置/尺寸保存防抖序号（连续拖动时只在停下约 500ms 后落一次盘）。</summary>
+    private long _mainWindowSaveSerial;
 
     /// <summary>内容窗口位置/尺寸保存防抖序号。</summary>
     private long _contentWindowSaveSerial;
+
+    /// <summary>设置窗口位置/尺寸保存防抖序号。</summary>
+    private long _settingsWindowSaveSerial;
 
     /// <summary>独立工具窗口位置/尺寸保存防抖序号（按 toolId，连续拖动只在停下后落一次盘）。</summary>
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, long> _toolWindowSaveSerials =
@@ -85,6 +91,9 @@ public sealed class ShellHost
     private int _port;
     private ServerInfoView _serverInfo = null!;
     private bool _devMode;
+
+    /// <summary>当前界面主题（system / light / dark），用于原生标题栏与工具页注入。</summary>
+    private string _theme = Configuration.ThemeSetting.System;
 
     /// <summary>启动后待打开的工具窗口队列（--open-tool 用）。</summary>
     private readonly Queue<LoadedTool> _pendingToolsToOpen = new();
@@ -142,6 +151,7 @@ public sealed class ShellHost
 
         // 全局热键按配置启动（热键走独立线程消息循环，不依赖 UI 消息泵）
         var shellConfig = QTools.Host.Ai.ConfigStore.Load(QTools.Host.Configuration.AppPaths.ConfigFilePath);
+        _theme = QTools.Host.Configuration.ThemeSetting.Normalize(shellConfig.Shell?.Theme);
         if (shellConfig.Shell?.HotkeyEnabled ?? true)
         {
             StartHotkey();
@@ -172,6 +182,7 @@ public sealed class ShellHost
                 .RegisterStartupHandler((_, _) =>
                 {
                     LogRuntimeInfo();
+                    ApplyWindowChrome(mainWindow, refreshFrame: true);
                     DrainPendingTools();
                 })
                 .RegisterExitHandler((_, e) =>
@@ -290,6 +301,7 @@ public sealed class ShellHost
             HideTrayMenuNow();
             _hiddenByHotkey = false;
             window.Show();
+            ApplyWindowChrome(window);
             if (window.WindowState == PhotinoWindowState.Minimized)
             {
                 window.Restore();
@@ -656,9 +668,8 @@ public sealed class ShellHost
     }
 
     /// <summary>启动时取上次手动调整的主窗口尺寸（DIP），并夹到当前显示器工作区内。</summary>
-    private static (int Width, int Height) ResolveMainWindowSize()
+    private static (int Width, int Height) ResolveMainWindowSize(QTools.Host.Configuration.AppConfig config)
     {
-        var config = QTools.Host.Ai.ConfigStore.Load(QTools.Host.Configuration.AppPaths.ConfigFilePath);
         var (width, height) = MainWindowSize.Resolve(
             config.Shell?.MainWindowWidth, config.Shell?.MainWindowHeight);
 
@@ -673,70 +684,98 @@ public sealed class ShellHost
         return (Math.Min(width, maxWidth), Math.Min(height, maxHeight));
     }
 
-    private void OnMainWindowSizeChanged(int width, int height)
+    private void ScheduleMainWindowSave()
     {
-        // 窗口尚未交给 Run、最大化/最小化/全屏都不是用户想记住的普通窗口尺寸
-        if (_mainWindow is null or { IsClosed: true } || _mainWindow.WindowState != PhotinoWindowState.Normal)
-        {
-            return;
-        }
-
-        if (!MainWindowSize.ShouldPersist(width, height))
-        {
-            return;
-        }
-
-        var serial = Interlocked.Increment(ref _mainWindowSizeSaveSerial);
+        var serial = Interlocked.Increment(ref _mainWindowSaveSerial);
         _ = System.Threading.Tasks.Task.Run(async () =>
         {
             try
             {
                 await System.Threading.Tasks.Task.Delay(500).ConfigureAwait(false);
-                if (Interlocked.Read(ref _mainWindowSizeSaveSerial) != serial)
+                if (Interlocked.Read(ref _mainWindowSaveSerial) != serial)
                 {
                     return;
                 }
 
-                PersistMainWindowSize(width, height);
+                (int Left, int Top, int Width, int Height)? bounds = null;
+                await InvokeOnUiThreadAsync(() =>
+                {
+                    bounds = CaptureMainWindowBounds();
+                    return System.Threading.Tasks.Task.CompletedTask;
+                }).ConfigureAwait(false);
+
+                if (bounds is { } value)
+                {
+                    PersistMainWindowGeometry(value);
+                }
             }
             catch (Exception ex)
             {
-                Log.Warn($"保存主窗口尺寸失败：{ex.Message}");
+                Log.Warn($"保存主窗口位置失败：{ex.Message}");
             }
         });
     }
 
-    private void SaveCurrentMainWindowSize()
+    private void SaveCurrentMainWindowGeometry()
     {
-        if (_mainWindow is { IsClosed: false } window && window.WindowState == PhotinoWindowState.Normal)
+        if (CaptureMainWindowBounds() is { } bounds)
         {
-            PersistMainWindowSize(window.Width, window.Height);
+            PersistMainWindowGeometry(bounds);
         }
     }
 
-    private static void PersistMainWindowSize(int width, int height)
+    private (int Left, int Top, int Width, int Height)? CaptureMainWindowBounds()
     {
-        if (!MainWindowSize.ShouldPersist(width, height))
+        var window = _mainWindow;
+        if (window is null || CaptureWindowBounds(window) is not { } bounds)
         {
-            return;
+            return null;
         }
 
+        return MainWindowSize.ShouldPersist(bounds.Width, bounds.Height) ? bounds : null;
+    }
+
+    private static void PersistMainWindowGeometry((int Left, int Top, int Width, int Height) bounds)
+    {
         var path = QTools.Host.Configuration.AppPaths.ConfigFilePath;
         var config = QTools.Host.Ai.ConfigStore.Load(path);
         var shell = config.Shell ?? new QTools.Host.Configuration.ShellConfigSection();
-        if (shell.MainWindowWidth == width && shell.MainWindowHeight == height)
+        if (shell.MainWindowLeft == bounds.Left &&
+            shell.MainWindowTop == bounds.Top &&
+            shell.MainWindowWidth == bounds.Width &&
+            shell.MainWindowHeight == bounds.Height)
         {
             return;
         }
 
         QTools.Host.Ai.ConfigStore.Save(
-            path, config with { Shell = shell with { MainWindowWidth = width, MainWindowHeight = height } });
-        Log.Debug($"主窗口尺寸已保存：{width}×{height}");
+            path,
+            config with
+            {
+                Shell = shell with
+                {
+                    MainWindowLeft = bounds.Left,
+                    MainWindowTop = bounds.Top,
+                    MainWindowWidth = bounds.Width,
+                    MainWindowHeight = bounds.Height,
+                },
+            });
+        Log.Debug($"主窗口位置/尺寸已保存：({bounds.Left},{bounds.Top}) {bounds.Width}×{bounds.Height}");
     }
 
     private PhotinoWindow CreateHostWindow()
     {
-        var (width, height) = ResolveMainWindowSize();
+        var config = QTools.Host.Ai.ConfigStore.Load(QTools.Host.Configuration.AppPaths.ConfigFilePath);
+        var (width, height) = ResolveMainWindowSize(config);
+        var savedOrigin = ResolveSavedWindowOrigin(
+            config.Shell?.MainWindowLeft, config.Shell?.MainWindowTop,
+            MainWindowSize.MinWidth, MainWindowSize.MinHeight,
+            ref width, ref height);
+        if (savedOrigin is null && config.Shell?.MainWindowLeft is not null && config.Shell?.MainWindowTop is not null)
+        {
+            Log.Info("主窗口上次位置已不在任何显示器上，改为居中打开");
+        }
+
         var window = new PhotinoWindow()
             .SetTitle("QTools")
             .SetUseOsDefaultSize(false)
@@ -746,11 +785,11 @@ public sealed class ShellHost
             .SetContextMenuEnabled(_devMode)
             .SetDevToolsEnabled(_devMode)
             .SetUserDataFolder(QTools.Host.Configuration.AppPaths.WebViewUserDataDirectory)
-            .Center()
-            .RegisterSizeChangedHandler((_, e) => OnMainWindowSizeChanged(e.Width, e.Height))
+            .RegisterLocationChangedHandler((_, _) => ScheduleMainWindowSave())
+            .RegisterSizeChangedHandler((_, _) => ScheduleMainWindowSave())
             .RegisterClosingHandler((_, e) =>
             {
-                SaveCurrentMainWindowSize();
+                SaveCurrentMainWindowGeometry();
 
                 // 托盘可用时，点关闭按钮只是收起主窗口；只有托盘「退出 QTools」才真正结束进程
                 if (_exitRequested || _tray is null)
@@ -774,11 +813,26 @@ public sealed class ShellHost
                 });
             })
             .RegisterClosedHandler((_, _) => Log.Info("主窗口已关闭"))
-            .RegisterInitialContentLoadedHandler((_, _) => Log.Info($"主窗口初始内容已加载：{HostUiUrl}"))
+            .RegisterInitialContentLoadedHandler((_, _) =>
+            {
+                Log.Info($"主窗口初始内容已加载：{HostUiUrl}");
+                ApplyWindowChrome(_mainWindow, refreshFrame: true);
+            })
             .Load(HostUiUrl);
 
         ApplyWindowIcon(window);
         AttachBridge(window, BridgeDispatcher.HostToolId);
+        AttachWindowTheme(window);
+        if (savedOrigin is { } origin)
+        {
+            RestoreWindowOrigin(window, origin.Left, origin.Top);
+            Log.Info($"已恢复主窗口位置 {origin.Left},{origin.Top}，{width}×{height}");
+        }
+        else
+        {
+            window.Center();
+        }
+
         return window;
     }
 
@@ -818,6 +872,7 @@ public sealed class ShellHost
                 content.SetTitle(title);
                 content.Load(url);
                 content.Show();
+                ApplyWindowChrome(content, refreshFrame: true);
                 content.Activate();
                 Log.Info($"内容窗口复用（保持上次位置与尺寸）→ {url}");
                 return System.Threading.Tasks.Task.CompletedTask;
@@ -877,7 +932,10 @@ public sealed class ShellHost
             _contentWindow = window;
             ApplyWindowIcon(window);
             AttachBridge(window, BridgeDispatcher.HostToolId);
+            AttachWindowTheme(window);
+            ApplyWindowChrome(window);
             window.Show();
+            ApplyWindowChrome(window, refreshFrame: true);
 
             var flags = LoadContentWindowFlags();
             GetWindowState(window);
@@ -1072,6 +1130,87 @@ public sealed class ShellHost
             $"内容窗口位置/尺寸已保存：({bounds.Left},{bounds.Top}) {bounds.Width}×{bounds.Height}");
     }
 
+    /// <summary>设置窗口位置/尺寸防抖保存：连续拖动/缩放时只在停下约 500ms 后落一次盘。</summary>
+    private void ScheduleSettingsWindowSave()
+    {
+        var serial = Interlocked.Increment(ref _settingsWindowSaveSerial);
+        _ = System.Threading.Tasks.Task.Run(async () =>
+        {
+            try
+            {
+                await System.Threading.Tasks.Task.Delay(500).ConfigureAwait(false);
+                if (Interlocked.Read(ref _settingsWindowSaveSerial) != serial)
+                {
+                    return;
+                }
+
+                (int Left, int Top, int Width, int Height)? bounds = null;
+                await InvokeOnUiThreadAsync(() =>
+                {
+                    bounds = CaptureSettingsWindowBounds();
+                    return System.Threading.Tasks.Task.CompletedTask;
+                }).ConfigureAwait(false);
+
+                if (bounds is { } value)
+                {
+                    PersistSettingsWindowBounds(value);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"保存设置窗口位置失败：{ex.Message}");
+            }
+        });
+    }
+
+    private void SaveSettingsWindowNow()
+    {
+        if (CaptureSettingsWindowBounds() is { } bounds)
+        {
+            PersistSettingsWindowBounds(bounds);
+        }
+    }
+
+    private (int Left, int Top, int Width, int Height)? CaptureSettingsWindowBounds()
+    {
+        if (!_toolWindows.TryGetValue(SettingsWindowKey, out var window) || window.IsClosed ||
+            CaptureWindowBounds(window) is not { } bounds)
+        {
+            return null;
+        }
+
+        return SettingsWindowBounds.ShouldPersist(bounds.Width, bounds.Height) ? bounds : null;
+    }
+
+    private static void PersistSettingsWindowBounds((int Left, int Top, int Width, int Height) bounds)
+    {
+        var path = QTools.Host.Configuration.AppPaths.ConfigFilePath;
+        var config = QTools.Host.Ai.ConfigStore.Load(path);
+        var shell = config.Shell ?? new QTools.Host.Configuration.ShellConfigSection();
+        if (shell.SettingsWindowLeft == bounds.Left &&
+            shell.SettingsWindowTop == bounds.Top &&
+            shell.SettingsWindowWidth == bounds.Width &&
+            shell.SettingsWindowHeight == bounds.Height)
+        {
+            return;
+        }
+
+        QTools.Host.Ai.ConfigStore.Save(
+            path,
+            config with
+            {
+                Shell = shell with
+                {
+                    SettingsWindowLeft = bounds.Left,
+                    SettingsWindowTop = bounds.Top,
+                    SettingsWindowWidth = bounds.Width,
+                    SettingsWindowHeight = bounds.Height,
+                },
+            });
+        Log.Debug(
+            $"设置窗口位置/尺寸已保存：({bounds.Left},{bounds.Top}) {bounds.Width}×{bounds.Height}");
+    }
+
     /// <summary>工具窗口位置/尺寸防抖保存：连续拖动/缩放时只在停下约 500ms 后落一次盘。</summary>
     private void ScheduleToolWindowBoundsSave(string toolId)
     {
@@ -1169,6 +1308,104 @@ public sealed class ShellHost
             new BridgeEventEnvelope("evt-" + Guid.NewGuid().ToString("N"), "launcher-changed"),
             QTools.Host.Serialization.AppJsonContext.Default.BridgeEventEnvelope);
         _ = SendToWindowAsync(main, envelope);
+    }
+
+    /// <summary>
+    /// 弹出系统通知（Windows 托盘气泡）。任意线程可调用；当前平台无托盘实现时返回 false。
+    /// </summary>
+    public bool Notify(string title, string body, TrayNotificationLevel level = TrayNotificationLevel.Info)
+    {
+        return _tray?.Notify(title, body, level) ?? false;
+    }
+
+    /// <summary>主题切换后通知所有宿主页面实时换肤（主窗口 / 内容窗口 / 设置 / 托盘弹层）。</summary>
+    public void NotifyThemeChanged(string theme)
+    {
+        _theme = QTools.Host.Configuration.ThemeSetting.Normalize(theme);
+
+        var envelope = System.Text.Json.JsonSerializer.Serialize(
+            new BridgeEventEnvelope("evt-" + Guid.NewGuid().ToString("N"), "theme-changed"),
+            QTools.Host.Serialization.AppJsonContext.Default.BridgeEventEnvelope);
+
+        _ = System.Threading.Tasks.Task.Run(async () =>
+        {
+            try
+            {
+                await InvokeOnUiThreadAsync(() =>
+                {
+                    // 原生标题栏跟随主题（在线工具窗口也有标题栏；托盘弹层无边框，跳过不影响）
+                    ApplyWindowChrome(_mainWindow, refreshFrame: true);
+                    ApplyWindowChrome(_contentWindow, refreshFrame: true);
+                    foreach (var window in _toolWindows.Values)
+                    {
+                        ApplyWindowChrome(window, refreshFrame: true);
+                    }
+
+                    SendEventOnUiThread(_mainWindow, envelope);
+                    SendEventOnUiThread(_contentWindow, envelope);
+                    foreach (var (key, window) in _toolWindows)
+                    {
+                        // 在线工具是外部页面，没有桥接接收端——只换标题栏，不发事件
+                        if (!key.StartsWith("web:", StringComparison.Ordinal))
+                        {
+                            SendEventOnUiThread(window, envelope);
+                        }
+                    }
+
+                    SendEventOnUiThread(_trayMenuWindow, envelope);
+                    return System.Threading.Tasks.Task.CompletedTask;
+                }).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Log.Debug($"主题切换事件推送失败：{ex.Message}");
+            }
+        });
+    }
+
+    /// <summary>应用原生标题栏主题（非 Windows 空操作）。</summary>
+    private void ApplyWindowChrome(PhotinoWindow? window, bool refreshFrame = false)
+    {
+        if (window is null || window.IsClosed)
+        {
+            return;
+        }
+
+        WindowTheme.Apply(
+            window, QTools.Host.Configuration.ThemeSetting.IsDarkNow(_theme), refreshFrame);
+    }
+
+    /// <summary>
+    /// 窗口创建后调用：原生窗口一创建（尚未显示）就应用标题栏主题，避免首帧白条；
+    /// 并在每次激活时重申（系统主题在运行期变化时可自动纠正）。
+    /// </summary>
+    private void AttachWindowTheme(PhotinoWindow window)
+    {
+        try
+        {
+            window.RegisterCreatedHandler((_, _) => ApplyWindowChrome(window));
+            window.RegisterActivatedHandler((_, _) => ApplyWindowChrome(window));
+        }
+        catch (Exception ex)
+        {
+            Log.Debug($"注册窗口主题回调失败：{ex.Message}");
+        }
+    }
+
+    /// <summary>UI 线程内直接投递事件（窗口已关闭时静默跳过）。</summary>
+    private static void SendEventOnUiThread(PhotinoWindow? window, string json)
+    {
+        try
+        {
+            if (window is { IsClosed: false })
+            {
+                window.SendWebMessage(json);
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Debug($"事件推送失败（窗口可能已关闭）：{ex.Message}");
+        }
     }
 
     /// <summary>主窗口被热键隐藏时内容窗口一起隐藏（呼出时一起恢复）。</summary>
@@ -1274,8 +1511,12 @@ public sealed class ShellHost
             ApplyWindowIcon(window);
             AttachBridge(window, tool.Id);
 
+            AttachWindowTheme(window);
+            ApplyWindowChrome(window);
+
             // PhotinoX：Run() 只显示主窗口；运行期创建的窗口必须显式 Show() 才会初始化 WebView 并可见
             window.Show();
+            ApplyWindowChrome(window, refreshFrame: true);
 
             GetWindowState(window).BaseResizable = tool.Manifest.Window.Resizable;
             window.SetTopmost(windowPrefs.Topmost);
@@ -1544,10 +1785,74 @@ public sealed class ShellHost
         });
     }
 
+    /// <summary>打开原生文件选择对话框，让用户挑一个导入文件（HTML 或 .qtools 导出包；未选择返回 null）。</summary>
+    public System.Threading.Tasks.Task<string?> PickImportFileAsync()
+    {
+        return InvokeOnUiThreadAsync(() =>
+        {
+            if (_mainWindow is null)
+            {
+                throw new BridgeException("INTERNAL_ERROR", "主窗口尚未就绪");
+            }
+
+            var filters = new (string, string[])[]
+            {
+                ("QTools 工具（HTML / 导出包）", new[] { "html", "htm", "qtools", "zip" }),
+                ("所有文件", new[] { "*" }),
+            };
+
+            var picked = _mainWindow.ShowOpenFile(
+                "选择要导入的 HTML 文件或导出包",
+                string.Empty,
+                multiSelect: false,
+                filters);
+
+            var first = picked is { Length: > 0 } ? picked[0] : null;
+            if (!string.IsNullOrWhiteSpace(first))
+            {
+                Log.Info($"用户通过文件对话框选择导入文件：{first}");
+            }
+
+            return first;
+        });
+    }
+
+    /// <summary>打开原生保存对话框，让用户选导出位置（未选择返回 null）。</summary>
+    public System.Threading.Tasks.Task<string?> PickExportFileAsync(string defaultFileName)
+    {
+        return InvokeOnUiThreadAsync(() =>
+        {
+            if (_mainWindow is null)
+            {
+                throw new BridgeException("INTERNAL_ERROR", "主窗口尚未就绪");
+            }
+
+            var filters = new (string, string[])[]
+            {
+                ("QTools 导出包", new[] { "qtools" }),
+                ("ZIP 压缩包", new[] { "zip" }),
+                ("所有文件", new[] { "*" }),
+            };
+
+            var picked = _mainWindow.ShowSaveFile(
+                "导出条目",
+                string.Empty,
+                filters,
+                defaultFileName);
+
+            if (!string.IsNullOrWhiteSpace(picked))
+            {
+                Log.Info($"用户通过保存对话框选择导出位置：{picked}");
+            }
+
+            return picked;
+        });
+    }
+
     /// <summary>打开（或聚焦）独立的设置窗口。</summary>
     public async System.Threading.Tasks.Task OpenSettingsAsync()
     {
-        const string settingsKey = "__settings__";
+        const string settingsKey = SettingsWindowKey;
 
         await InvokeOnUiThreadAsync(() =>
         {
@@ -1562,17 +1867,37 @@ public sealed class ShellHost
                 _toolWindows.Remove(settingsKey);
             }
 
+            var config = QTools.Host.Ai.ConfigStore.Load(QTools.Host.Configuration.AppPaths.ConfigFilePath);
+            var shellConfig = config.Shell ?? new QTools.Host.Configuration.ShellConfigSection();
+            var (settingsWidth, settingsHeight) = SettingsWindowBounds.ResolveSize(
+                shellConfig.SettingsWindowWidth, shellConfig.SettingsWindowHeight);
+            var savedOrigin = ResolveSavedWindowOrigin(
+                shellConfig.SettingsWindowLeft, shellConfig.SettingsWindowTop,
+                SettingsWindowBounds.MinWidth, SettingsWindowBounds.MinHeight,
+                ref settingsWidth, ref settingsHeight);
+            if (savedOrigin is null &&
+                shellConfig.SettingsWindowLeft is not null && shellConfig.SettingsWindowTop is not null)
+            {
+                Log.Info("设置窗口上次位置已不在任何显示器上，改为居中打开");
+            }
+
             var window = new PhotinoWindow()
                 .SetTitle("设置 — QTools")
                 .SetUseOsDefaultSize(false)
-                .SetSize(680, 760)
-                .SetMinSize(560, 520)
+                .SetUseOsDefaultLocation(false)
+                .SetSize(settingsWidth, settingsHeight)
+                .SetMinSize(SettingsWindowBounds.MinWidth, SettingsWindowBounds.MinHeight)
                 .SetResizable(true)
                 .SetContextMenuEnabled(_devMode)
                 .SetDevToolsEnabled(_devMode)
                 .SetUserDataFolder(QTools.Host.Configuration.AppPaths.WebViewUserDataDirectory)
-                .Center()
-                .RegisterClosingHandler((_, _) => Log.Info("设置窗口请求关闭"))
+                .RegisterLocationChangedHandler((_, _) => ScheduleSettingsWindowSave())
+                .RegisterSizeChangedHandler((_, _) => ScheduleSettingsWindowSave())
+                .RegisterClosingHandler((_, _) =>
+                {
+                    SaveSettingsWindowNow();
+                    Log.Info("设置窗口请求关闭");
+                })
                 .RegisterClosedHandler((_, _) =>
                 {
                     Log.Info("设置窗口已关闭");
@@ -1583,8 +1908,20 @@ public sealed class ShellHost
             _toolWindows[settingsKey] = window;
             ApplyWindowIcon(window);
             AttachBridge(window, BridgeDispatcher.HostToolId);
+            AttachWindowTheme(window);
+            ApplyWindowChrome(window);
+            if (savedOrigin is { } origin)
+            {
+                RestoreWindowOrigin(window, origin.Left, origin.Top);
+                Log.Info($"设置窗口恢复上次位置 {origin.Left},{origin.Top}，{settingsWidth}×{settingsHeight}");
+            }
+            else
+            {
+                window.Center();
+            }
 
             window.Show();
+            ApplyWindowChrome(window, refreshFrame: true);
 
             Log.Info($"已打开设置窗口 → {SettingsUrl}");
             return System.Threading.Tasks.Task.CompletedTask;
@@ -1644,8 +1981,11 @@ public sealed class ShellHost
             _toolWindows[key] = window;
             ApplyWindowIcon(window);
             // 故意不 AttachBridge：外部页面拿不到 window.host，也无法进入桥接分发
+            AttachWindowTheme(window);
+            ApplyWindowChrome(window);
 
             window.Show();
+            ApplyWindowChrome(window, refreshFrame: true);
 
             Log.Info($"已打开在线工具窗口 {tool.Id} → {url}");
             return System.Threading.Tasks.Task.CompletedTask;

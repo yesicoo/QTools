@@ -22,6 +22,23 @@
 <main class="main">
 
   <section class="panel">
+    <h2>外观</h2>
+    <p class="hint">主题同时作用于主窗口、内容窗口、本设置页与托盘菜单；选择「跟随系统」时随 Windows 深色模式自动切换。</p>
+    <div class="form">
+      <label>界面主题
+        <select id="theme-select">
+          <option value="system">跟随系统</option>
+          <option value="light">浅色</option>
+          <option value="dark">深色</option>
+        </select>
+      </label>
+    </div>
+    <div class="row">
+      <span id="theme-status" class="badge none">…</span>
+    </div>
+  </section>
+
+  <section class="panel">
     <h2>运行环境</h2>
     <dl class="info">
       <div><dt>平台</dt><dd id="set-platform">…</dd></div>
@@ -158,6 +175,7 @@
 </main>
 
 <div id="toast" class="toast" hidden></div>
+<script src="/__host__/theme.js" defer></script>
 <script src="/__host__/settings.js" defer></script>
 </body>
 </html>

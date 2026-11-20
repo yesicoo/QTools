@@ -32,7 +32,7 @@
       icon.appendChild(img);
     } else {
       var name = (item.name || "?").trim();
-      icon.textContent = item.glyph || name.charAt(0) || "?";
+      icon.textContent = item.glyph || (name ? Array.from(name)[0] : "?");
     }
 
     var nameEl = document.createElement("span");

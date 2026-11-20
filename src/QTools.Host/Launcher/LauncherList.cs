@@ -21,7 +21,8 @@ public sealed record LauncherItemView(
     string? Category,
     string? Glyph,
     string? Target = null,
-    string? Description = null);
+    string? Description = null,
+    bool Pinned = false);
 
 /// <summary>索引状态（列表附带，前端展示「索引中…」与上次完成时间）。</summary>
 public sealed record LauncherIndexStatus(bool Indexing, string? LastIndexedUtc, int ProgramCount);
@@ -44,7 +45,8 @@ public static class LauncherListBuilder
         UsageStore? usage,
         string iconCacheDirectory,
         WebToolRegistry? webTools = null,
-        HiddenProgramStore? hiddenPrograms = null)
+        HiddenProgramStore? hiddenPrograms = null,
+        PinnedItemStore? pinnedItems = null)
     {
         var rows = new List<(LauncherItemView Item, string LastUsed)>();
 
@@ -64,7 +66,8 @@ public static class LauncherListBuilder
                 tool.Manifest.Category,
                 tool.Manifest.Glyph,
                 null,
-                tool.Manifest.Description), used?.LastUsedUtc ?? ""));
+                tool.Manifest.Description,
+                pinnedItems?.IsPinned(KindTool, tool.Id) ?? false), used?.LastUsedUtc ?? ""));
         }
 
         var manualTargets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -89,7 +92,8 @@ public static class LauncherListBuilder
                 app.Entry.Category,
                 app.Entry.Glyph,
                 app.Entry.Target,
-                null), used?.LastUsedUtc ?? ""));
+                null,
+                pinnedItems?.IsPinned(KindApp, app.Id) ?? false), used?.LastUsedUtc ?? ""));
         }
 
         if (index is not null)
@@ -123,7 +127,8 @@ public static class LauncherListBuilder
                     entry.Category,
                     null,
                     entry.Target,
-                    null), used?.LastUsedUtc ?? ""));
+                    null,
+                    pinnedItems?.IsPinned(KindProgram, entry.Id) ?? false), used?.LastUsedUtc ?? ""));
             }
         }
 
@@ -146,13 +151,15 @@ public static class LauncherListBuilder
                     web.Entry.Category,
                     web.Entry.Glyph,
                     web.Entry.Url,
-                    web.Entry.Description), used?.LastUsedUtc ?? ""));
+                    web.Entry.Description,
+                    pinnedItems?.IsPinned(KindWeb, web.Id) ?? false), used?.LastUsedUtc ?? ""));
             }
         }
 
-        // 默认展示顺序：使用次数降序 → 最近使用降序 → 名称升序（搜索时前端自行过滤）
+        // 默认展示顺序：置顶优先 → 使用次数降序 → 最近使用降序 → 名称升序（搜索时前端自行过滤）
         var items = rows
-            .OrderByDescending(r => r.Item.UseCount)
+            .OrderByDescending(r => r.Item.Pinned)
+            .ThenByDescending(r => r.Item.UseCount)
             .ThenByDescending(r => r.LastUsed, StringComparer.Ordinal)
             .ThenBy(r => r.Item.Name, StringComparer.OrdinalIgnoreCase)
             .Select(r => r.Item)

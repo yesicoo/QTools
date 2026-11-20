@@ -6,6 +6,8 @@ const fs = require('node:fs');
 const ui = `${__dirname}/../src/QTools.Host/Assets/host-ui`;
 const source = fs.readFileSync(`${ui}/app.js`, 'utf8');
 const html = fs.readFileSync(`${ui}/index.html`, 'utf8');
+const themeSource = fs.readFileSync(`${ui}/theme.js`, 'utf8');
+const toolThemeSource = fs.readFileSync(`${ui}/tool-theme.js`, 'utf8');
 const flush = () => new Promise(setImmediate);
 /* vm 沙箱里创建的对象带另一套原型，deepStrictEqual 前先转成宿主 realm 的纯对象 */
 const plain = value => JSON.parse(JSON.stringify(value));
@@ -37,6 +39,7 @@ class Element {
     this.hidden = /\shidden\b/.test(tag); this.disabled = /\sdisabled\b/.test(tag);
     this.checked = /\schecked\b/.test(tag); this.value = ''; this.src = ''; this.textContent = '';
     this.offsetParent = {}; this.onclick = null; this.files = null;
+    this.style = {}; this.offsetWidth = 0; this.offsetHeight = 0;
     const self = this;
     this.classList = {
       add: name => { if (!self.hasClass(name)) self.className += ` ${name}`; },
@@ -54,6 +57,7 @@ class Element {
   appendChild(child) { this.children.push(child); return child; }
   addEventListener(event, handler) { (this.handlers[event] ||= []).push(handler); }
   getAttribute(name) { assert.equal(name, 'src'); return this.src || null; }
+  getBoundingClientRect() { return { left: 12, top: 20, right: 300, bottom: 46, width: 288, height: 26 }; }
   focus() {}
   select() {}
   blur() {}
@@ -122,6 +126,8 @@ async function setup(options = {}) {
     await reply('embedTool', { toolId: id, name: `工具${id}`, permissions: [], url: `/tools/${id}/?bt=${token}` });
   };
   const versions = async () => { click('tool-versions'); await reply('listVersions', { versions: [] }); };
+  /* 导入页：原生对话框由后端弹出，测试里直接回填选择结果 */
+  const pickFile = async payload => { click('import-pick'); await reply('pickImportFile', payload); };
   const view_ = id => {
     for (const name of ['tool-view', 'content-home', 'create-view', 'version-view', 'import-view', 'web-view']) {
       assert.equal(el(name).hidden, name !== id, `视图状态错误：${name}`);
@@ -136,7 +142,7 @@ async function setup(options = {}) {
   nodes['update-bump'].value = 'patch';
   vm.runInNewContext(source, {
     window: {
-      host, location: { search },
+      host, location: { search }, innerWidth: 360, innerHeight: 720,
       addEventListener: (event, handler) => { (windowHandlers[event] ||= []).push(handler); }
     },
     document: {
@@ -144,17 +150,14 @@ async function setup(options = {}) {
       querySelectorAll: query, querySelector: selector => query(selector)[0] || null,
       addEventListener: (event, handler) => { (documentHandlers[event] ||= []).push(handler); }
     },
-    setTimeout: () => 1, clearTimeout() {}, confirm: options.confirm || (() => true),
-    FileReader: class {
-      readAsText(file) { this.result = file.html; Promise.resolve().then(() => this.onload()); }
-    }
+    setTimeout: () => 1, clearTimeout() {}, confirm: options.confirm || (() => true)
   }, { filename: `${ui}/app.js` });
   if (mode === 'content') {
     await reply('listTools', { tools: toolList });
   } else {
     await reply('launcherList', { items: list, index: indexInfo });
   }
-  return { el, click, navItem, requests, last, reply, embed, versions, view: view_, fireWindow, fireDocument, liOf, menuOf, menuAction, body, nodes };
+  return { el, click, navItem, requests, last, reply, embed, versions, pickFile, view: view_, fireWindow, fireDocument, liOf, menuOf, menuAction, body, nodes };
 }
 
 /* ================= 主窗口：统一列表 ================= */
@@ -167,6 +170,33 @@ test('主窗口渲染统一列表（小工具+本机程序混排）并显示索�
   assert.equal(h.el('side-empty').hidden, true);
   assert.equal(badgeOf(h.navItem('tool:a')).textContent, 'v1.2.3');
   assert.equal(badgeOf(h.navItem('app:editor')).textContent, '开发');
+});
+
+test('没有图标的小工具在图标位显示名称首字符', async () => {
+  const h = await setup({ list: [
+    item({ id: 'imported', kind: 'tool', name: '图片压缩', version: '1.0.0', glyph: null, useCount: 1 }),
+    item({ id: 'emoji', kind: 'tool', name: '🎯 打靶', version: '1.0.0', glyph: null, useCount: 1 }),
+    item({ id: 'custom', kind: 'tool', name: '工具c', version: '1.0.0', glyph: '🧮', useCount: 1 })
+  ] });
+  const glyphOf = key => h.navItem(key).children[0].textContent;
+  assert.equal(glyphOf('tool:imported'), '图', '无图标时用名称首字符');
+  assert.equal(glyphOf('tool:emoji'), '🎯', '按 Unicode 码点取首字符');
+  assert.equal(glyphOf('tool:custom'), '🧮', '显式 glyph 优先');
+});
+
+test('列表行尾显示调用次数（含 0 次）', async () => {
+  const h = await setup();
+  const usesOf = key => h.navItem(key).children.find(c => c.hasClass('nav-uses'));
+  assert.equal(usesOf('tool:a').textContent, '5次');
+  assert.equal(usesOf('tool:a').title, '已使用 5 次');
+  assert.equal(usesOf('app:editor').textContent, '3次');
+  assert.ok(!usesOf('tool:a').hasClass('zero'));
+
+  const search = h.el('search');
+  search.value = '已卸载';
+  search.fire('input');
+  assert.equal(usesOf('program:gone').textContent, '0次', '搜索到的未使用条目显示 0 次');
+  assert.ok(usesOf('program:gone').hasClass('zero'), '0 次用更淡的样式');
 });
 
 test('首页隐藏零使用条目，搜索仍可找到', async () => {
@@ -306,7 +336,7 @@ test('launcher-changed 与 focus 事件都触发主窗口刷新', async () => {
   assert.equal(h.requests('launcherList').length, 3);
 });
 
-test('右键本机程序：原位菜单「移除」走 deleteApp', async () => {
+test('右键本机程序：浮层菜单「移除」走 deleteApp', async () => {
   const h = await setup();
   let prevented = false;
   h.navItem('app:editor').fire('contextmenu', { preventDefault() { prevented = true; } });
@@ -314,10 +344,12 @@ test('右键本机程序：原位菜单「移除」走 deleteApp', async () => {
   const li = h.liOf('app:editor');
   const btn = h.navItem('app:editor');
   const menu = h.menuOf(li);
-  assert.ok(menu, '右键后应出现原位菜单');
-  assert.equal(btn.hidden, true);
+  assert.ok(menu, '右键后应出现浮层菜单');
+  assert.equal(btn.hidden, false, '条目按钮不再隐藏（菜单是浮层，不占布局）');
   assert.equal(menu.hidden, false);
-  h.menuAction(li, 2).click();
+  assert.match(menu.style.left, /^\d+px$/, '浮层菜单用 fixed 坐标定位');
+  assert.match(menu.style.top, /^\d+px$/);
+  h.menuAction(li, 3).click();
   assert.deepEqual(plain(h.last('deleteApp').payload), { appId: 'editor' });
   await h.reply('deleteApp', { ok: true });
   assert.match(h.el('toast').textContent, /已移除 编辑器/);
@@ -337,7 +369,7 @@ test('右键索引程序：原位菜单「隐藏」走 hideProgram', async () =>
   assert.equal(h.requests('launcherList').length, 2);
 });
 
-test('在线工具：点击独立窗口打开，原位菜单「打开网址/删除」', async () => {
+test('在线工具：点击独立窗口打开，浮层菜单「打开网址/删除」', async () => {
   const list = [
     ...items,
     item({ id: 'site', kind: 'web', name: '资讯站', searchKey: '资讯站', category: '资讯' }),
@@ -360,7 +392,7 @@ test('在线工具：点击独立窗口打开，原位菜单「打开网址/删�
 
   h.navItem('web:site').fire('contextmenu', { preventDefault() {} });
   li = h.liOf('web:site');
-  h.menuAction(li, 3).click();
+  h.menuAction(li, 4).click();
   assert.deepEqual(plain(h.last('deleteWebTool').payload), { webId: 'site' });
   await h.reply('deleteWebTool', { ok: true });
   assert.match(h.el('toast').textContent, /已删除 资讯站/);
@@ -372,7 +404,7 @@ test('在线工具菜单含「重命名」，原位表单走 renameWebTool', asy
   h.navItem('web:site').fire('contextmenu', { preventDefault() {} });
   const li = h.liOf('web:site');
   const labels = h.menuOf(li).children[0].children.map(b => b.children[0].textContent);
-  assert.deepEqual(labels, ['详情', '打开网址', '重命名', '删除']);
+  assert.deepEqual(labels, ['详情', '打开网址', '重命名', '导出', '删除']);
 
   h.menuAction(li, 2).click();
   const form = h.menuOf(li).children[2];
@@ -414,11 +446,11 @@ test('添加网址：内容窗口保存自动补 https，主模式按钮打开�
   assert.deepEqual(plain(main.last('openContent').payload), { view: 'web' });
 });
 
-test('右键小工具：原位菜单「删除」走 deleteTool', async () => {
+test('右键小工具：浮层菜单「删除」走 deleteTool', async () => {
   const h = await setup();
   h.navItem('tool:a').fire('contextmenu', { preventDefault() {} });
   const li = h.liOf('tool:a');
-  h.menuAction(li, 4).click();
+  h.menuAction(li, 7).click();
   assert.deepEqual(plain(h.last('deleteTool').payload), { toolId: 'a', deleteStorage: true });
   await h.reply('deleteTool', { ok: true });
   assert.equal(h.requests('launcherList').length, 2);
@@ -429,11 +461,85 @@ test('右键小工具：创建桌面快捷方式走 createToolShortcut', async (
   const h = await setup();
   h.navItem('tool:a').fire('contextmenu', { preventDefault() {} });
   const li = h.liOf('tool:a');
-  h.menuAction(li, 3).click();
+  h.menuAction(li, 6).click();
   assert.deepEqual(plain(h.last('createToolShortcut').payload), { toolId: 'a' });
   await h.reply('createToolShortcut', { path: 'C:\\Desktop\\工具a.lnk', fileName: '工具a.lnk' });
   assert.match(h.el('toast').textContent, /已创建桌面快捷方式：工具a\.lnk/);
-  assert.equal(h.navItem('tool:a').hidden, false, '成功后菜单应收起并还原条目');
+  assert.equal(h.menuOf(li).hidden, true, '成功后菜单应收起');
+  assert.equal(h.navItem('tool:a').hidden, false, '条目按钮始终可见');
+});
+
+test('右键小工具：版本管理打开内容窗口版本面板', async () => {
+  const h = await setup();
+  h.navItem('tool:a').fire('contextmenu', { preventDefault() {} });
+  const li = h.liOf('tool:a');
+  const labels = h.menuOf(li).children[0].children.map(b => b.children[0].textContent);
+  assert.equal(labels[2], '版本管理');
+  h.menuAction(li, 2).click();
+  assert.deepEqual(plain(h.last('openContent').payload), { view: 'version', toolId: 'a' });
+  assert.equal(h.menuOf(li).hidden, true, '点击后菜单应收起');
+});
+
+test('右键小工具：置顶/取消置顶走 setItemPinned 并刷新列表', async () => {
+  const list = [
+    item({ id: 'a', kind: 'tool', name: '工具a', version: '1.2.3', searchKey: '工具a a', useCount: 5 }),
+    item({ id: 'b', kind: 'tool', name: '工具b', version: '1.2.3', searchKey: '工具b b', useCount: 1, pinned: true })
+  ];
+  const h = await setup({ list });
+  assert.ok(h.navItem('tool:b').hasClass('pinned'), '置顶条目带 pinned 标记');
+  const pinOf = btn => btn.children.filter(c => c.hasClass('nav-pin'))[0];
+  assert.ok(pinOf(h.navItem('tool:b')), '置顶条目显示图钉');
+  assert.equal(pinOf(h.navItem('tool:a')), undefined);
+
+  h.navItem('tool:a').fire('contextmenu', { preventDefault() {} });
+  const li = h.liOf('tool:a');
+  const labels = h.menuOf(li).children[0].children.map(b => b.children[0].textContent);
+  assert.equal(labels[4], '置顶');
+  h.menuAction(li, 4).click();
+  assert.deepEqual(plain(h.last('setItemPinned').payload), { kind: 'tool', id: 'a', pinned: true });
+  await h.reply('setItemPinned', { ok: true });
+  assert.match(h.el('toast').textContent, /已置顶「工具a」/);
+  assert.equal(h.requests('launcherList').length, 2);
+});
+
+test('已置顶的小工具菜单显示「取消置顶」', async () => {
+  const list = [item({ id: 'b', kind: 'tool', name: '工具b', version: '1.2.3', searchKey: '工具b b', useCount: 1, pinned: true })];
+  const h = await setup({ list });
+  h.navItem('tool:b').fire('contextmenu', { preventDefault() {} });
+  const li = h.liOf('tool:b');
+  h.menuAction(li, 4).click();
+  assert.deepEqual(plain(h.last('setItemPinned').payload), { kind: 'tool', id: 'b', pinned: false });
+  await h.reply('setItemPinned', { ok: true });
+  assert.match(h.el('toast').textContent, /已取消置顶「工具b」/);
+});
+
+test('右键菜单：导出走 exportItem，取消保存不提示成功', async () => {
+  const h = await setup();
+  h.navItem('tool:a').fire('contextmenu', { preventDefault() {} });
+  let li = h.liOf('tool:a');
+  h.menuAction(li, 5).click();
+  assert.deepEqual(plain(h.last('exportItem').payload), { kind: 'tool', id: 'a' });
+  await h.reply('exportItem', { path: 'C:\\tmp\\工具a.qtools', fileName: '工具a.qtools', sizeBytes: 2048 });
+  assert.match(h.el('toast').textContent, /已导出：工具a\.qtools/);
+
+  h.navItem('app:editor').fire('contextmenu', { preventDefault() {} });
+  li = h.liOf('app:editor');
+  h.menuAction(li, 2).click();
+  await h.reply('exportItem', { path: null, fileName: null, sizeBytes: 0 });
+  assert.match(h.el('toast').textContent, /已取消导出/);
+});
+
+test('浮层菜单定位在鼠标处并夹取在视口内', async () => {
+  const h = await setup();
+  h.navItem('tool:a').fire('contextmenu', { preventDefault() {}, clientX: 350, clientY: 700 });
+  const menu = h.menuOf(h.liOf('tool:a'));
+  assert.equal(menu.style.left, '136px', '右侧不足时向左夹取（360-216-8）');
+  assert.equal(menu.style.top, '472px', '底部不足时向上夹取（720-240-8）');
+
+  h.navItem('app:editor').fire('contextmenu', { preventDefault() {}, clientX: 40, clientY: 60 });
+  const menu2 = h.menuOf(h.liOf('app:editor'));
+  assert.equal(menu2.style.left, '40px');
+  assert.equal(menu2.style.top, '60px');
 });
 
 test('右键菜单：详情展开与返回、再右键同一条目收起还原', async () => {
@@ -462,36 +568,45 @@ test('右键菜单：详情展开与返回、再右键同一条目收起还原',
   assert.equal(detail.hidden, true);
 
   btn.fire('contextmenu', { preventDefault() {} });
-  assert.equal(btn.hidden, false, '再次右键应还原条目按钮');
-  assert.equal(menu.hidden, true);
+  assert.equal(btn.hidden, false, '条目按钮始终可见');
+  assert.equal(h.menuOf(li).hidden, true, '再次右键同一条目收起菜单');
 });
 
-test('一次只开一个菜单：右键另一条目时前一个还原', async () => {
+test('一次只开一个菜单：右键另一条目时前一个收起', async () => {
   const h = await setup();
   h.navItem('app:editor').fire('contextmenu', { preventDefault() {} });
   const liA = h.liOf('app:editor');
   h.navItem('tool:a').fire('contextmenu', { preventDefault() {} });
   const liB = h.liOf('tool:a');
-  assert.equal(h.navItem('app:editor').hidden, false, '前一个应还原');
-  assert.equal(h.menuOf(liA).hidden, true);
-  assert.equal(h.navItem('tool:a').hidden, true, '新条目应处于菜单态');
+  assert.equal(h.menuOf(liA).hidden, true, '前一个应收起');
   assert.equal(h.menuOf(liB).hidden, false);
+  assert.equal(h.navItem('tool:a').hidden, false, '条目按钮始终可见');
 });
 
 test('Escape 与点击外部收起菜单，点菜单内部不收起', async () => {
   const h = await setup();
   h.navItem('app:editor').fire('contextmenu', { preventDefault() {} });
   const li = h.liOf('app:editor');
+  const menu = h.menuOf(li);
 
-  h.fireDocument('click', { target: h.menuOf(li).children[0].children[0] });
-  assert.equal(h.navItem('app:editor').hidden, true, '点菜单内部不应收起');
+  h.fireDocument('click', { target: menu.children[0].children[0] });
+  assert.equal(menu.hidden, false, '点菜单内部不应收起');
 
   h.fireDocument('click', { target: h.el('search') });
-  assert.equal(h.navItem('app:editor').hidden, false, '点击外部应收起');
+  assert.equal(menu.hidden, true, '点击外部应收起');
 
   h.navItem('app:editor').fire('contextmenu', { preventDefault() {} });
   h.fireDocument('keydown', { key: 'Escape', target: null });
-  assert.equal(h.navItem('app:editor').hidden, false, 'Escape 应收起');
+  assert.equal(h.menuOf(li).hidden, true, 'Escape 应收起');
+});
+
+test('列表滚动时浮层菜单自动收起', async () => {
+  const h = await setup();
+  h.navItem('app:editor').fire('contextmenu', { preventDefault() {} });
+  const menu = h.menuOf(h.liOf('app:editor'));
+  assert.equal(menu.hidden, false);
+  h.fireDocument('scroll', {});
+  assert.equal(menu.hidden, true);
 });
 
 test('菜单「属性」调用 revealItem 并收起菜单', async () => {
@@ -500,7 +615,7 @@ test('菜单「属性」调用 revealItem 并收起菜单', async () => {
   const li = h.liOf('app:editor');
   h.menuAction(li, 1).click();
   assert.deepEqual(plain(h.last('revealItem').payload), { kind: 'app', id: 'editor' });
-  assert.equal(h.navItem('app:editor').hidden, false);
+  assert.equal(h.menuOf(li).hidden, true);
 });
 
 /* ================= 小工具原位重命名 ================= */
@@ -512,18 +627,18 @@ const renameCancel = (h, li) => renameForm(h, li).children[2].children[1];
 const openRename = h => {
   h.navItem('tool:a').fire('contextmenu', { preventDefault() {} });
   const li = h.liOf('tool:a');
-  h.menuAction(li, 2).click();   /* 详情0 / 属性1 / 重命名2 / 创建桌面快捷方式3 / 删除4 */
+  h.menuAction(li, 3).click();   /* 详情0 / 属性1 / 版本管理2 / 重命名3 / 置顶4 / 导出5 / 创建桌面快捷方式6 / 删除7 */
   return li;
 };
 
-test('小工具菜单含「重命名」，点击原位展开预填表单', async () => {
+test('小工具菜单含「重命名」，点击展开预填表单', async () => {
   const h = await setup();
   h.navItem('tool:a').fire('contextmenu', { preventDefault() {} });
   const li = h.liOf('tool:a');
   const labels = h.menuOf(li).children[0].children.map(b => b.children[0].textContent);
-  assert.deepEqual(labels, ['详情', '属性', '重命名', '创建桌面快捷方式', '删除']);
+  assert.deepEqual(labels, ['详情', '属性', '版本管理', '重命名', '置顶', '导出', '创建桌面快捷方式', '删除']);
 
-  h.menuAction(li, 2).click();
+  h.menuAction(li, 3).click();
   const menu = h.menuOf(li);
   assert.equal(menu.children[0].hidden, true, '展开重命名时隐藏动作区');
   assert.equal(menu.children[1].hidden, true, '展开重命名时隐藏详情');
@@ -539,7 +654,7 @@ test('重命名：确认 trim 后调用 renameTool，成功收起并刷新列表
   assert.deepEqual(plain(h.last('renameTool').payload), { toolId: 'a', name: '新名称' });
   await h.reply('renameTool', { ok: true });
   assert.match(h.el('toast').textContent, /已重命名为「新名称」/);
-  assert.equal(h.navItem('tool:a').hidden, false, '成功后应还原条目按钮');
+  assert.equal(h.menuOf(li).hidden, true, '成功后应收起菜单');
   assert.equal(h.requests('launcherList').length, 2, '成功后刷新统一列表');
 });
 
@@ -617,12 +732,12 @@ test('列表悬停提示描述，小工具徽标/图标使用分类与自定义�
   assert.equal(descRow.children[1].textContent, '四则运算');
 });
 
-test('本机程序菜单不含「重命名」（小工具与在线工具才有）', async () => {
+test('本机程序菜单不含「重命名/置顶」（小工具才有）', async () => {
   const h = await setup();
   h.navItem('app:editor').fire('contextmenu', { preventDefault() {} });
   const li = h.liOf('app:editor');
   const labels = h.menuOf(li).children[0].children.map(b => b.children[0].textContent);
-  assert.deepEqual(labels, ['详情', '属性', '移除']);
+  assert.deepEqual(labels, ['详情', '属性', '导出', '移除']);
   assert.equal(h.menuOf(li).children.length, 2, '非小工具不构建重命名表单');
 });
 
@@ -879,12 +994,101 @@ test('更新应用后刷新版本列表与工具清单', async () => {
 
 test('重新打开导入面板会清空上次选择的文件', async () => {
   const h = await setup({ mode: 'content', view: 'import' });
-  h.el('import-file').value = 'old.html';
+  await h.pickFile({
+    path: 'C:\\tmp\\old.html', fileName: 'old.html', kind: 'html',
+    html: '<h1>旧</h1>', name: 'old', version: null, itemKind: null
+  });
+  assert.equal(h.el('import-file-name').textContent, 'old.html');
   h.click('import-cancel');
   assert.equal(h.requests('closeContent').length, 1);
   const h2 = await setup({ mode: 'content', view: 'import' });
-  assert.equal(h2.el('import-file').value, '');
   assert.equal(h2.el('import-file-name').textContent, '未选择文件');
+});
+
+test('导入页：选择 HTML 文件后由后端读回内容并预填名称', async () => {
+  const h = await setup({ mode: 'content', view: 'import' });
+  await h.pickFile({
+    path: 'C:\\tmp\\test.html', fileName: 'test.html', kind: 'html',
+    html: '<h1>测试</h1>', name: 'test', version: null, itemKind: null
+  });
+  assert.equal(h.el('import-file-name').textContent, 'test.html');
+  assert.equal(h.el('import-name').value, 'test', '用文件名预填工具名');
+  assert.equal(h.el('import-name').disabled, false);
+  assert.equal(h.el('import-package-hint').hidden, true);
+  h.click('import-run');
+  assert.equal(h.last('importTool').payload.html, '<h1>测试</h1>');
+});
+
+test('导入页：取消原生选择对话框不改动表单', async () => {
+  const h = await setup({ mode: 'content', view: 'import' });
+  h.el('import-name').value = '已有名称';
+  await h.pickFile({ path: null, fileName: null, kind: '', html: null, name: null, version: null, itemKind: null });
+  assert.equal(h.el('import-file-name').textContent, '未选择文件');
+  assert.equal(h.el('import-name').value, '已有名称');
+});
+
+test('导入页：选择导出包后锁定元数据输入并调用 importItemPackage', async () => {
+  const h = await setup({ mode: 'content', view: 'import' });
+  await h.pickFile({
+    path: 'C:\\tmp\\题库.qtools', fileName: '题库.qtools', kind: 'package',
+    html: null, name: '题库工具', version: '2.1.0', itemKind: 'tool'
+  });
+  assert.equal(h.el('import-file-name').textContent, '题库.qtools（导出包）');
+  assert.equal(h.el('import-name').value, '题库工具');
+  assert.equal(h.el('import-name').disabled, true, '导出包自带元数据');
+  assert.equal(h.el('import-category').disabled, true);
+  assert.equal(h.el('import-package-hint').hidden, false);
+
+  h.click('import-run');
+  assert.deepEqual(plain(h.last('importItemPackage').payload), {
+    path: 'C:\\tmp\\题库.qtools', acceptHighSeverity: false
+  });
+  await h.reply('importItemPackage', {
+    kind: 'tool', itemId: 'tiku', itemName: '题库工具', saved: true,
+    permissions: ['storage'], findings: [], hasFatal: false,
+    requiresExplicitAcceptance: false, externalAssets: []
+  });
+  assert.equal(h.requests('openTool').length, 1);
+  assert.deepEqual(plain(h.last('openTool').payload), { toolId: 'tiku' });
+});
+
+test('导入导出包：在线工具直接保存并收起管理窗口', async () => {
+  const h = await setup({ mode: 'content', view: 'import' });
+  await h.pickFile({
+    path: 'C:\\tmp\\site.qtools', fileName: 'site.qtools', kind: 'package',
+    html: null, name: '站点', version: null, itemKind: 'web'
+  });
+  h.click('import-run');
+  await h.reply('importItemPackage', {
+    kind: 'web', itemId: 'site', itemName: '站点', saved: true,
+    permissions: [], findings: [], hasFatal: false,
+    requiresExplicitAcceptance: false, externalAssets: []
+  });
+  assert.match(h.el('toast').textContent, /已导入在线工具「站点」/);
+  assert.equal(h.requests('closeContent').length, 1);
+  assert.equal(h.requests('openTool').length, 0);
+});
+
+test('导入导出包：小工具高危项审查后二次确认才保存', async () => {
+  const h = await setup({ mode: 'content', view: 'import' });
+  await h.pickFile({
+    path: 'C:\\tmp\\x.qtools', fileName: 'x.qtools', kind: 'package',
+    html: null, name: 'X', version: '1.0.0', itemKind: 'tool'
+  });
+  h.click('import-run');
+  assert.equal(h.el('import-run').disabled, true);
+  assert.equal(h.el('import-confirm').disabled, true, '忙碌期间确认按钮禁用');
+  await h.reply('importItemPackage', {
+    kind: 'tool', itemId: 'x', itemName: 'X', saved: false,
+    permissions: [], findings: [{ severity: 1, code: 'ALLOW_EVAL', message: '启用了 allowEval' }],
+    hasFatal: false, requiresExplicitAcceptance: true, externalAssets: []
+  });
+  assert.equal(h.el('import-review').hidden, false);
+  assert.match(h.el('import-findings').children[0].textContent, /ALLOW_EVAL/);
+  h.click('import-confirm');
+  assert.deepEqual(plain(h.last('importItemPackage').payload), {
+    path: 'C:\\tmp\\x.qtools', acceptHighSeverity: true
+  });
 });
 
 test('读取文件及导入期间禁用重复提交并锁定审查输入', async () => {
@@ -893,7 +1097,11 @@ test('读取文件及导入期间禁用重复提交并锁定审查输入', async
   h.el('import-desc').value = ' 测试工具 ';
   h.el('import-category').value = ' 效率 ';
   h.el('import-glyph').value = ' 🧮 ';
-  h.el('import-file').files = [{ name: 'test.html', html: '<h1>测试</h1>' }];
+  await h.pickFile({
+    path: 'C:\\tmp\\test.html', fileName: 'test.html', kind: 'html',
+    html: '<h1>测试</h1>', name: 'test', version: null, itemKind: null
+  });
+  h.el('import-name').value = '导入测试';
   h.click('import-run');
   assert.equal(h.el('import-run').disabled, true);
   h.click('import-run');
@@ -902,11 +1110,12 @@ test('读取文件及导入期间禁用重复提交并锁定审查输入', async
   assert.equal(h.last('importTool').payload.description, '测试工具');
   assert.equal(h.last('importTool').payload.category, '效率');
   assert.equal(h.last('importTool').payload.glyph, '🧮');
-  assert.equal(h.el('import-file').disabled, true);
+  assert.equal(h.el('import-pick').disabled, true);
   assert.equal(h.el('import-category').disabled, true);
   assert.equal(h.el('import-confirm').disabled, true);
   await h.reply('importTool', { saved: false, findings: [], permissions: [], toolId: 'test' });
   assert.equal(h.el('import-run').disabled, false);
+  assert.equal(h.el('import-name').disabled, false, 'HTML 模式解锁元数据');
   assert.equal(h.el('import-review').hidden, false);
   h.click('import-confirm');
   h.click('import-confirm');
@@ -920,18 +1129,159 @@ test('读取文件及导入期间禁用重复提交并锁定审查输入', async
   assert.equal(h.requests('closeContent').length, 1);
 });
 
-for (const id of ['import-name', 'import-desc', 'import-category', 'import-glyph', 'import-file']) {
+for (const id of ['import-name', 'import-desc', 'import-category', 'import-glyph']) {
   test(`修改${id}后隐藏旧审查并禁止直接确认`, async () => {
     const h = await setup({ mode: 'content', view: 'import' });
     h.el('import-name').value = '旧名称';
-    h.el('import-file').files = [{ name: 'test.html', html: '<h1>测试</h1>', size: 20 }];
+    await h.pickFile({
+      path: 'C:\\tmp\\test.html', fileName: 'test.html', kind: 'html',
+      html: '<h1>测试</h1>', name: 'test', version: null, itemKind: null
+    });
     h.click('import-run');
     await flush();
     await h.reply('importTool', { saved: false, findings: [], permissions: [], toolId: 'test' });
     const input = h.el(id);
-    input.fire(id === 'import-file' ? 'change' : 'input');
+    input.fire('input');
     assert.equal(h.el('import-review').hidden, true);
     h.click('import-confirm');
     assert.equal(h.requests('importTool').length, 1);
   });
 }
+
+/* ================= 主题实时切换（theme.js） ================= */
+
+async function setupTheme(replyOf) {
+  const attrs = {};
+  const handlers = {};
+  const calls = [];
+  const documentElement = {
+    setAttribute(name, value) { attrs[name] = value; },
+    removeAttribute(name) { delete attrs[name]; }
+  };
+  const host = {
+    callManager(method) {
+      calls.push(method);
+      return Promise.resolve({ theme: replyOf() });
+    }
+  };
+  vm.runInNewContext(themeSource, {
+    window: {
+      host,
+      addEventListener: (event, handler) => { (handlers[event] ||= []).push(handler); }
+    },
+    document: { documentElement }
+  }, { filename: `${ui}/theme.js` });
+  await flush();
+  const fire = (event, arg) => (handlers[event] || []).forEach(handler => handler(arg));
+  return { attrs, calls, fire };
+}
+
+test('theme.js 启动时按宿主主题写入 html 的 data-theme', async () => {
+  const h = await setupTheme(() => 'dark');
+  assert.deepEqual(h.calls, ['manager.getTheme']);
+  assert.equal(h.attrs['data-theme'], 'dark');
+});
+
+test('theme.js 收到 theme-changed 后重新取主题，system 时移除属性', async () => {
+  let current = 'light';
+  const h = await setupTheme(() => current);
+  assert.equal(h.attrs['data-theme'], 'light');
+
+  current = 'system';
+  h.fire('host-event', { detail: 'theme-changed' });
+  await flush();
+  assert.equal(h.calls.length, 2);
+  assert.equal(h.attrs['data-theme'], undefined, '跟随系统时不写死 data-theme');
+
+  h.fire('host-event', { detail: 'launcher-changed' });
+  await flush();
+  assert.equal(h.calls.length, 2, '其它事件不触发主题刷新');
+});
+
+/* ================= 工具页主题（tool-theme.js） ================= */
+
+async function setupToolTheme({ themed, theme, dark, mediaDark = false }) {
+  const attrs = {
+    'data-qtools-themed': themed ? '1' : '0',
+    'data-qtools-theme': theme
+  };
+  if (theme === 'light' || theme === 'dark') { attrs['data-theme'] = theme; }
+  if (!themed && (theme === 'dark' || (theme === 'system' && dark))) {
+    attrs['data-qtools-auto-dark'] = '1';
+  }
+
+  const windowHandlers = {};
+  const mediaHandlers = [];
+  const state = { theme, dark };
+  let mediaMatches = mediaDark;
+  const host = {
+    theme: { get: () => Promise.resolve({ theme: state.theme, dark: state.dark }) }
+  };
+  const root = {
+    getAttribute: name => (name in attrs ? attrs[name] : null),
+    setAttribute: (name, value) => { attrs[name] = value; },
+    removeAttribute: name => { delete attrs[name]; }
+  };
+  vm.runInNewContext(toolThemeSource, {
+    window: {
+      host,
+      matchMedia: () => ({
+        get matches() { return mediaMatches; },
+        addEventListener: (event, handler) => { if (event === 'change') mediaHandlers.push(handler); }
+      }),
+      addEventListener: (event, handler) => { (windowHandlers[event] ||= []).push(handler); }
+    },
+    document: { documentElement: root }
+  }, { filename: `${ui}/tool-theme.js` });
+  await flush();
+  const fire = (event, arg) => (windowHandlers[event] || []).forEach(handler => handler(arg));
+  const setMedia = matches => { mediaMatches = matches; mediaHandlers.forEach(handler => handler()); };
+  return { attrs, state, fire, setMedia };
+}
+
+test('工具页主题：自带深色样式的页面只切 data-theme，不做反色', async () => {
+  const h = await setupToolTheme({ themed: true, theme: 'light', dark: false });
+  assert.equal(h.attrs['data-theme'], 'light');
+
+  h.state.theme = 'dark';
+  h.state.dark = true;
+  h.fire('host-event', { detail: 'theme-changed' });
+  await flush();
+  assert.equal(h.attrs['data-theme'], 'dark');
+  assert.equal(h.attrs['data-qtools-auto-dark'], undefined);
+
+  h.state.theme = 'system';
+  h.state.dark = false;
+  h.fire('host-event', { detail: 'theme-changed' });
+  await flush();
+  assert.equal(h.attrs['data-theme'], undefined, '跟随系统时移除显式主题');
+});
+
+test('工具页主题：旧工具在深色时加反色兜底，切浅色后移除', async () => {
+  const h = await setupToolTheme({ themed: false, theme: 'dark', dark: true });
+  assert.equal(h.attrs['data-qtools-auto-dark'], '1');
+
+  h.state.theme = 'light';
+  h.state.dark = false;
+  h.fire('host-event', { detail: 'theme-changed' });
+  await flush();
+  assert.equal(h.attrs['data-qtools-auto-dark'], undefined);
+  assert.equal(h.attrs['data-theme'], 'light');
+
+  h.state.theme = 'dark';
+  h.state.dark = true;
+  h.fire('host-event', { detail: 'theme-changed' });
+  await flush();
+  assert.equal(h.attrs['data-qtools-auto-dark'], '1');
+});
+
+test('工具页主题：跟随系统时随系统深浅同步反色兜底', async () => {
+  const h = await setupToolTheme({ themed: false, theme: 'system', dark: false });
+  assert.equal(h.attrs['data-qtools-auto-dark'], undefined);
+
+  h.setMedia(true);
+  assert.equal(h.attrs['data-qtools-auto-dark'], '1', '系统切到深色后自动反色');
+
+  h.setMedia(false);
+  assert.equal(h.attrs['data-qtools-auto-dark'], undefined);
+});

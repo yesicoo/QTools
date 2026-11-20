@@ -59,14 +59,34 @@ internal static class Program
         using var singleInstance = new Mutex(initiallyOwned: true, "QTools.Host.SingleInstance", out var isFirstInstance);
         if (!isFirstInstance)
         {
-            // 桌面快捷方式：把「打开工具」转交给已运行实例（托盘里的 QTools 可能没有主窗口）
+            // 命令行二次调用：把「显示通知」或「打开工具」转交给已运行实例（常驻托盘、可能没有主窗口）
+            if (!string.IsNullOrWhiteSpace(options.NotifyTitle))
+            {
+                var forwarded = SingleInstanceOpenTool.TryForward(
+                    new SingleInstanceMessage(
+                        SingleInstanceMessage.NotifyCommand,
+                        Title: options.NotifyTitle,
+                        Body: options.NotifyBody),
+                    TimeSpan.FromSeconds(3));
+                Log.Warn($"QTools 已在运行，转发系统通知：{(forwarded ? "成功" : "失败")}");
+                if (!forwarded)
+                {
+                    SingleInstanceOpenTool.ShowForwardFailure("显示系统通知");
+                }
+
+                return forwarded ? 0 : 8;
+            }
+
             if (!string.IsNullOrWhiteSpace(options.OpenToolId))
             {
-                var forwarded = SingleInstanceOpenTool.TryForward(options.OpenToolId, TimeSpan.FromSeconds(3));
+                var forwarded = SingleInstanceOpenTool.TryForward(
+                    new SingleInstanceMessage(
+                        SingleInstanceMessage.OpenToolCommand, Id: options.OpenToolId),
+                    TimeSpan.FromSeconds(3));
                 Log.Warn($"QTools 已在运行，转发打开工具 {options.OpenToolId}：{(forwarded ? "成功" : "失败")}");
                 if (!forwarded)
                 {
-                    SingleInstanceOpenTool.ShowForwardFailure(options.OpenToolId);
+                    SingleInstanceOpenTool.ShowForwardFailure($"打开工具「{options.OpenToolId}」");
                 }
 
                 return forwarded ? 0 : 4;
@@ -76,6 +96,12 @@ internal static class Program
             Log.Warn(message);
             Console.Error.WriteLine(message);
             return 0;
+        }
+
+        // 仅发一条系统通知（定时任务常见用法）：不启动服务与窗口，显示后退出
+        if (!string.IsNullOrWhiteSpace(options.NotifyTitle))
+        {
+            return NotifyOnly(options.NotifyTitle, options.NotifyBody);
         }
 
         try
@@ -131,19 +157,43 @@ internal static class Program
                 shell.QueueToolToOpen(tool);
             }
 
-            // 桌面快捷方式二次启动 → 命名管道转发；监听必须在消息循环外启动（UI 线程只负责开窗）
-            using var openToolListener = SingleInstanceOpenTool.StartListener(async toolId =>
+            // 二次启动 → 命名管道转交（打开工具 / 显示通知）；监听必须在消息循环外启动（UI 线程只负责开窗）
+            using var instanceListener = SingleInstanceOpenTool.StartListener(async message =>
             {
-                var tool = server.Tools.Find(toolId);
-                if (tool is null || !tool.IsValid)
+                switch (message.Cmd)
                 {
-                    Log.Warn($"单实例转发：工具不存在或无效：{toolId}");
-                    return false;
-                }
+                    case SingleInstanceMessage.OpenToolCommand:
+                    {
+                        var toolId = message.Id ?? string.Empty;
+                        var tool = server.Tools.Find(toolId);
+                        if (tool is null || !tool.IsValid)
+                        {
+                            Log.Warn($"单实例转发：工具不存在或无效：{toolId}");
+                            return false;
+                        }
 
-                Log.Info($"单实例转发：打开工具窗口 {toolId}");
-                await shell.OpenToolAsync(tool).ConfigureAwait(false);
-                return true;
+                        Log.Info($"单实例转发：打开工具窗口 {toolId}");
+                        await shell.OpenToolAsync(tool).ConfigureAwait(false);
+                        return true;
+                    }
+
+                    case SingleInstanceMessage.NotifyCommand:
+                    {
+                        var title = message.Title?.Trim();
+                        if (string.IsNullOrWhiteSpace(title))
+                        {
+                            return false;
+                        }
+
+                        var shown = shell.Notify(title, message.Body ?? string.Empty);
+                        Log.Info($"单实例转发：显示系统通知「{title}」：{(shown ? "成功" : "失败")}");
+                        return shown;
+                    }
+
+                    default:
+                        Log.Warn($"单实例转发：未知命令 {message.Cmd}");
+                        return false;
+                }
             });
 
             var exitCode = shell.Run(server.Port, options.DevMode);
@@ -183,9 +233,43 @@ internal static class Program
                     server.Usage,
                     QTools.Host.Configuration.AppPaths.IconCacheDirectory,
                     server.WebTools,
-                    server.HiddenPrograms).Items,
+                    server.HiddenPrograms,
+                    server.PinnedItems).Items,
                 count);
         };
+    }
+
+    /// <summary>
+    /// 仅发一条系统通知：临时创建托盘图标 → 弹气泡 → 等待显示完成后退出。
+    /// 应用未运行时使用（定时任务常见场景）；已运行时走命名管道转发给主实例。
+    /// </summary>
+    private static int NotifyOnly(string title, string? body)
+    {
+        if (!TrayIcon.IsSupported)
+        {
+            Console.Error.WriteLine("QTools: 系统通知仅支持 Windows 平台");
+            return 8;
+        }
+
+        AppPaths.EnsureWindowIconExtracted();
+        using var tray = TrayIcon.TryCreate("QTools", static () => { }, static () => { });
+        if (tray is null)
+        {
+            Console.Error.WriteLine("QTools: 系统通知不可用（托盘图标创建失败）");
+            return 8;
+        }
+
+        if (!tray.Notify(title, body ?? string.Empty))
+        {
+            Console.Error.WriteLine("QTools: 系统通知发送失败");
+            return 8;
+        }
+
+        Log.Info($"已显示系统通知（独立进程）：{title}");
+
+        // 保留图标与消息循环，让通知完整显示（Windows 通知中心仍会保留记录）
+        Thread.Sleep(6000);
+        return 0;
     }
 
     /// <summary>

@@ -10,7 +10,8 @@
   var host = window.host || null;
   var lastGenerated = null;
   var pendingUpdate = null;
-  var pendingImport = null;
+  var pendingImport = null;      /* 已选 HTML：{ name, html } */
+  var pendingPackage = null;     /* 已选导出包：{ path, itemKind, name } */
   var importing = false;
 
   /* 页面模式：主窗口（默认）或内容窗口（宿主 OpenContentAsync 以 ?mode=content 打开） */
@@ -43,7 +44,7 @@
   var updateSequence = 0;
   var createSequence = 0;
 
-  /* 右键原位菜单：一次只开一个；li 内按钮 ↔ 菜单用 hidden 互换，重渲染时直接作废 */
+  /* 右键浮层菜单：一次只开一个；菜单 fixed 定位浮在列表上方，不占行内布局 */
   var openMenuState = null;         /* { key, item, li, btn, menuEl, actionsEl, detailEl } */
 
   function $(id) { return document.getElementById(id); }
@@ -75,19 +76,24 @@
     return (e && e.code ? e.code + "：" : "") + (e && e.message ? e.message : e);
   }
 
-  function iconFor(toolId, name) {
-    var id = (toolId + " " + name).toLowerCase();
+  function firstGlyph(name) {
+    var text = (name || "").trim();
+    return text ? Array.from(text)[0].toUpperCase() : "?";
+  }
+
+  /** 工具图标：显式 glyph 优先；内置常见工具保留语义图标；否则显示名称首字符。 */
+  function toolGlyph(tool) {
+    if (tool.glyph) { return tool.glyph; }
+    var id = (tool.id + " " + (tool.name || "")).toLowerCase();
     if (id.indexOf("json") >= 0) { return "{ }"; }
     if (id.indexOf("qr") >= 0 || id.indexOf("二维码") >= 0) { return "▦"; }
     if (id.indexOf("note") >= 0 || id.indexOf("todo") >= 0) { return "✎"; }
     if (id.indexOf("calc") >= 0) { return "＋"; }
-    return "◆";
+    return firstGlyph(tool.name || tool.id);
   }
 
   function appGlyph(app) {
-    if (app.glyph) { return app.glyph; }
-    var name = (app.name || app.id || "?").trim();
-    return name ? name[0].toUpperCase() : "?";
+    return app.glyph || firstGlyph(app.name || app.id);
   }
 
   function matchesSearch(text) {
@@ -201,7 +207,7 @@
     var isTool = item.kind === "tool";
     var isWeb = item.kind === "web";
     var broken = isWeb ? !item.isValid : (isTool ? !item.isValid : !item.targetExists);
-    var glyph = isTool ? (item.glyph || iconFor(item.id, item.name)) : appGlyph(item);
+    var glyph = isTool ? toolGlyph(item) : appGlyph(item);
     var badge = isTool
       ? (item.isValid ? (item.category || "v" + (item.version || "")) : "manifest 无效")
       : isWeb
@@ -211,7 +217,7 @@
     var li = document.createElement("li");
     var btn = document.createElement("button");
     btn.type = "button";
-    btn.className = "nav-item" + (!isTool ? " app-item" : "") + (broken ? " broken" : "");
+    btn.className = "nav-item" + (!isTool ? " app-item" : "") + (broken ? " broken" : "") + (item.pinned ? " pinned" : "");
     btn.dataset.key = item.kind + ":" + item.id;
     btn.title = (item.description ? item.description + "\n" : "") +
       item.name + "（" + kindLabel(item.kind) + "，右键管理）";
@@ -245,10 +251,23 @@
       b.textContent = badge;
       btn.appendChild(b);
     }
+    if (item.pinned) {
+      var pin = document.createElement("span");
+      pin.className = "nav-pin";
+      pin.title = "已置顶";
+      pin.innerHTML = menuIcon("pin");
+      btn.appendChild(pin);
+    }
+    /* 调用次数：行尾胶囊，放在最后一个保证数字右对齐（0 次更淡） */
+    var uses = document.createElement("span");
+    uses.className = "nav-uses" + (item.useCount > 0 ? "" : " zero");
+    uses.textContent = (item.useCount || 0) + "次";
+    uses.title = "已使用 " + (item.useCount || 0) + " 次";
+    btn.appendChild(uses);
     btn.addEventListener("click", function () { openItem(item); });
     btn.addEventListener("contextmenu", function (e) {
       e.preventDefault();
-      toggleItemMenu(item, li, btn);
+      toggleItemMenu(item, li, btn, e);
     });
     li.appendChild(btn);
     return li;
@@ -351,9 +370,9 @@
         frame.src = r.url;
       }
 
-      $("tool-name").textContent = r.name;
-      $("tool-glyph").textContent = iconFor(r.toolId, r.name);
       var listedTool = allTools.filter(function (tool) { return tool.id === r.toolId; })[0] || t;
+      $("tool-name").textContent = r.name;
+      $("tool-glyph").textContent = toolGlyph(listedTool);
       $("tool-meta").textContent = toolMeta({ version: listedTool.version, permissions: r.permissions });
       $("tool-versions").disabled = !t.isValid;
       showView("tool-view");
@@ -411,25 +430,48 @@
     }, function (e) { toast("操作失败：" + errText(e), true); });
   }
 
-  /* ================= 右键原位菜单（详情 / 属性 / 删除，一次只开一个） ================= */
+  /* ================= 右键浮层菜单（详情 / 属性 / 版本管理 / 置顶 / 导出 / 删除，一次只开一个） ================= */
   function itemMenuKey(item) { return item.kind + ":" + item.id; }
 
-  /** 收起菜单、还原条目按钮（带轻微还原动画）。 */
+  /** 收起菜单：浮层直接隐藏；条目按钮始终可见（菜单不占列表布局）。 */
   function closeItemMenu() {
     var state = openMenuState;
     if (!state) { return; }
     openMenuState = null;
     state.menuEl.hidden = true;
-    state.btn.hidden = false;
-    state.btn.classList.add("menu-restore");
-    setTimeout(function () { state.btn.classList.remove("menu-restore"); }, 240);
   }
 
-  function toggleItemMenu(item, li, btn) {
+  function toggleItemMenu(item, li, btn, event) {
     var key = itemMenuKey(item);
     if (openMenuState && openMenuState.key === key) { closeItemMenu(); return; }
     closeItemMenu();
-    openItemMenu(item, li, btn);
+    openItemMenu(item, li, btn, event);
+  }
+
+  /** 浮层定位：优先鼠标位置，缺坐标时贴条目按钮下方；贴近视口右/下边缘时向内夹取。 */
+  function placeItemMenu(menuEl, btn, event) {
+    var margin = 8;
+    var hasPoint = event && typeof event.clientX === "number" && typeof event.clientY === "number";
+    var x = margin;
+    var y = margin;
+    if (hasPoint) {
+      x = event.clientX;
+      y = event.clientY;
+    } else if (btn && typeof btn.getBoundingClientRect === "function") {
+      var rect = btn.getBoundingClientRect();
+      x = (rect && rect.left ? rect.left : 0) + 12;
+      y = (rect && rect.bottom ? rect.bottom : 0) + 4;
+    }
+
+    var vw = typeof window.innerWidth === "number" ? window.innerWidth : 0;
+    var vh = typeof window.innerHeight === "number" ? window.innerHeight : 0;
+    var w = menuEl.offsetWidth || 216;
+    var h = menuEl.offsetHeight || 240;
+    if (vw > 0) { x = Math.max(margin, Math.min(x, vw - w - margin)); }
+    if (vh > 0) { y = Math.max(margin, Math.min(y, vh - h - margin)); }
+
+    menuEl.style.left = x + "px";
+    menuEl.style.top = y + "px";
   }
 
   /* 菜单图标：内联 SVG（feather 风格，stroke 随文字色），与底部 dock 的图标语言一致 */
@@ -442,6 +484,9 @@
     shortcut: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>',
     minus: '<circle cx="12" cy="12" r="9"/><path d="M8 12h8"/>',
     eyeOff: '<path d="M3 3l18 18M10.6 10.6a2 2 0 0 0 2.8 2.8M9.9 5.2A9.6 9.6 0 0 1 12 5c7 0 10 7 10 7a17 17 0 0 1-3 3.9M6.6 6.6A16.6 16.6 0 0 0 2 12s3 7 10 7a9.7 9.7 0 0 0 5.4-1.6"/>',
+    pin: '<path d="M9 4h6l-1 6 3 3H7l3-3-1-6z"/><path d="M12 13v7"/>',
+    history: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 8v4l3 2"/>',
+    download: '<path d="M12 3v12m0 0 4-4m-4 4-4-4"/><path d="M4 19h16"/>',
     back: '<path d="M19 12H5m7-7-7 7 7 7"/>'
   };
 
@@ -450,7 +495,7 @@
       MENU_ICONS[name] + '</svg>';
   }
 
-  function openItemMenu(item, li, btn) {
+  function openItemMenu(item, li, btn, event) {
     if (!host) { toast("桥接不可用", true); return; }
 
     var actionsEl = document.createElement("div");
@@ -495,6 +540,14 @@
       menuAction("打开网址", "", function () { closeItemMenu(); openWebTool(item); }, "globe");
     } else {
       menuAction("属性", "", function () { revealItem(item); }, "folder");
+    }
+
+    /* 版本管理：快速进入该工具的版本面板（独立的宿主管理窗口） */
+    if (item.kind === "tool") {
+      menuAction("版本管理", "", function () {
+        closeItemMenu();
+        openContentPanel("version", item.id);
+      }, "history");
     }
 
     if (item.kind === "tool" || item.kind === "web") {
@@ -567,6 +620,30 @@
       }, "edit");
     }
 
+    /* 列表置顶：置顶条目固定在统一列表最前（只影响排序，与窗口级「置顶」无关） */
+    if (item.kind === "tool") {
+      menuAction(item.pinned ? "取消置顶" : "置顶", "", function () {
+        closeItemMenu();
+        host.callManager("manager.setItemPinned", {
+          kind: item.kind, id: item.id, pinned: !item.pinned
+        }).then(function () {
+          toast(item.pinned ? "已取消置顶「" + item.name + "」" : "已置顶「" + item.name + "」");
+          refreshLauncher();
+        }, function (e) { toast("操作失败：" + errText(e), true); });
+      }, "pin");
+    }
+
+    /* 导出当前运行版本为 .qtools 包（小工具含清单与当前版本文件，不含历史版本） */
+    if (item.kind === "tool" || item.kind === "app" || item.kind === "web") {
+      menuAction("导出", "", function () {
+        closeItemMenu();
+        host.callManager("manager.exportItem", { kind: item.kind, id: item.id }).then(function (r) {
+          if (r && r.path) { toast("已导出：" + ((r && r.fileName) || r.path)); }
+          else { toast("已取消导出"); }
+        }, function (e) { toast("导出失败：" + errText(e), true); });
+      }, "download");
+    }
+
     /* 桌面快捷方式：双击直达独立工具窗口（应用已在托盘时由单实例转发打开） */
     if (item.kind === "tool") {
       menuAction("创建桌面快捷方式", "", function () {
@@ -599,10 +676,17 @@
     menuEl.appendChild(detailEl);
     if (renameEl) { menuEl.appendChild(renameEl); }
 
+    /* 同一条目可能留有上次收起的旧菜单：先清掉，保证每次右键都是新菜单 */
+    for (var i = li.children.length - 1; i >= 0; i--) {
+      if (li.children[i].hasClass && li.children[i].hasClass("nav-menu")) {
+        li.children.splice(i, 1);
+      }
+    }
+
     li.appendChild(menuEl);
     openMenuState = { key: itemMenuKey(item), item: item, li: li, btn: btn, menuEl: menuEl, actionsEl: actionsEl, detailEl: detailEl };
-    btn.hidden = true;
     menuEl.hidden = false;
+    placeItemMenu(menuEl, btn, event);
   }
 
   /** 条目详情（原位展开）：名称/类型/ID/版本/类别/目标或网址/使用次数/状态。 */
@@ -1000,71 +1084,88 @@
     if (btn && !btn.hidden && !btn.disabled) { btn.click(); }
   }
 
-  /* ================= 导入本地 HTML ================= */
+  /* ================= 导入（HTML / .qtools 导出包，原生对话框自动识别） ================= */
   function setImportBusy(value) {
     importing = value;
-    ["import-run", "import-confirm", "import-file", "import-name", "import-desc", "import-category", "import-glyph"].forEach(function (id) {
+    ["import-pick", "import-run", "import-confirm"].forEach(function (id) {
       var el = $(id);
       if (el) { el.disabled = value; }
     });
+    setPackageLock(value || !!pendingPackage);
+  }
+
+  /** 锁定名称/描述/分类/图标：导出包自带元数据；忙碌期间同样锁定。 */
+  function setPackageLock(locked) {
+    ["import-name", "import-desc", "import-category", "import-glyph"].forEach(function (id) {
+      var el = $(id);
+      if (el) { el.disabled = locked; }
+    });
+    var hint = $("import-package-hint");
+    if (hint) { hint.hidden = !pendingPackage; }
   }
 
   function showImportView() {
     if (importing) { toast("正在导入，请稍候"); return; }
+    pendingImport = null;
+    pendingPackage = null;
     $("import-review").hidden = true;
     $("import-status").textContent = "";
     $("import-findings").innerHTML = "";
     $("import-assets-warning").hidden = true;
-    $("import-file").value = "";
     $("import-file-name").textContent = "未选择文件";
     $("import-file-name").classList.remove("set");
     $("import-name").value = "";
     $("import-desc").value = "";
     $("import-category").value = "";
     $("import-glyph").value = "";
-    pendingImport = null;
+    setPackageLock(false);
     showView("import-view");
   }
 
-  function readSelectedFile() {
-    var input = $("import-file");
-    var file = input.files && input.files[0];
-    if (!file) {
-      toast("请先选择一个 HTML 文件", true);
-      return null;
-    }
+  /** 原生对话框选择文件：HTML 读回内容走既有审查流程，导出包记录路径与自带元数据。 */
+  function pickImportFile() {
+    if (!host || importing) { return; }
+    host.callManager("manager.pickImportFile", {}).then(function (r) {
+      if (!r || !r.path) { return; }   // 用户取消
 
-    var lower = file.name.toLowerCase();
-    if (!lower.endsWith(".html") && !lower.endsWith(".htm")) {
-      toast("请选择 .html 或 .htm 文件", true);
-      return null;
-    }
+      pendingImport = null;
+      pendingPackage = null;
+      $("import-review").hidden = true;
+      var label = $("import-file-name");
+      label.textContent = r.fileName + (r.kind === "package" ? "（导出包）" : "");
+      label.classList.add("set");
 
-    setImportBusy(true);
-    var reader = new FileReader();
-    reader.onload = function () {
-      pendingImport = { name: $("import-name").value.trim(), html: String(reader.result || "") };
-      setImportBusy(false);
-      runImport(false);
-    };
-    reader.onerror = function () { setImportBusy(false); toast("读取文件失败", true); };
-    reader.readAsText(file, "utf-8");
-    return "reading";
+      if (r.kind === "package") {
+        pendingPackage = { path: r.path, itemKind: r.itemKind || "", name: r.name || "" };
+        $("import-name").value = r.name || "";
+        $("import-desc").value = "";
+        $("import-category").value = "";
+        $("import-glyph").value = "";
+        setPackageLock(true);
+        return;
+      }
+
+      pendingImport = { name: r.name || "", html: r.html || "" };
+      setPackageLock(false);
+      if (!$("import-name").value.trim()) { $("import-name").value = r.name || ""; }
+    }, function (e) { toast("选择文件失败：" + errText(e), true); });
   }
 
   function runImport(acceptHighSeverity) {
-    if (!host || importing || (acceptHighSeverity && !pendingImport)) { return; }
+    if (!host || importing) { return; }
+    if (acceptHighSeverity && !pendingImport && !pendingPackage) { return; }
 
-    if (!acceptHighSeverity) {
-      var name = $("import-name").value.trim();
-      if (!name) { toast("请填写工具名称", true); $("import-name").focus(); return; }
-      if (!pendingImport) {
-        var started = readSelectedFile();
-        if (started !== "reading") { return; }
-        return;   // 文件读取完成后会再次进入本函数
-      }
-      pendingImport.name = name;
+    if (!acceptHighSeverity && !pendingImport && !pendingPackage) {
+      toast("请先选择文件", true);
+      pickImportFile();
+      return;
     }
+
+    if (pendingPackage) { runPackageImport(acceptHighSeverity); return; }
+
+    var name = $("import-name").value.trim();
+    if (!name) { toast("请填写工具名称", true); $("import-name").focus(); return; }
+    pendingImport.name = name;
 
     $("import-status").textContent = acceptHighSeverity ? "正在导入…" : "正在检查…";
     setImportBusy(true);
@@ -1088,20 +1189,61 @@
       renderFindingsInto($("import-findings"), r.findings);
       $("import-toolid").textContent = r.toolId;
       $("import-perms").textContent = (r.permissions && r.permissions.length) ? r.permissions.join("、") : "无";
-      var warn = $("import-assets-warning");
-      if (r.externalAssets && r.externalAssets.length) {
-        warn.hidden = false;
-        warn.innerHTML = "检测到对工具目录外资源的引用，导入后这些资源将无法加载：<ul><li>" +
-          r.externalAssets.map(esc).join("</li><li>") + "</li></ul>";
-      } else {
-        warn.hidden = true;
-      }
+      showExternalAssetsWarning(r.externalAssets);
       $("import-review").hidden = false;
       toast("需要确认后才能导入", true);
     }, function (e) {
       $("import-status").textContent = "";
       toast("导入失败：" + errText(e), true);
     }).finally(function () { setImportBusy(false); });
+  }
+
+  /** 导出包导入：小工具带安全审查（高危需二次确认）；启动项/在线工具直接保存。 */
+  function runPackageImport(acceptHighSeverity) {
+    $("import-status").textContent = acceptHighSeverity ? "正在导入…" : "正在检查…";
+    setImportBusy(true);
+
+    host.callManager("manager.importItemPackage", {
+      path: pendingPackage.path,
+      acceptHighSeverity: !!acceptHighSeverity
+    }).then(function (r) {
+      if (!r) { $("import-status").textContent = ""; return; }
+
+      if (r.saved) {
+        if (r.kind === "tool") {
+          toast("已导入 " + r.itemName + "（已打开独立窗口）");
+          openSavedTool(r.itemId);
+          return;
+        }
+
+        toast("已导入" + (r.kind === "web" ? "在线工具" : "启动项") + "「" + r.itemName + "」");
+        refreshLauncher();
+        if (isContentMode) { closeContent(); } else { showView("content-home"); }
+        return;
+      }
+
+      $("import-status").textContent = "存在高危项，请审查后确认";
+      renderFindingsInto($("import-findings"), r.findings);
+      $("import-toolid").textContent = r.itemId;
+      $("import-perms").textContent = (r.permissions && r.permissions.length) ? r.permissions.join("、") : "无";
+      showExternalAssetsWarning(r.externalAssets);
+      $("import-review").hidden = false;
+      toast("需要确认后才能导入", true);
+    }, function (e) {
+      $("import-status").textContent = "";
+      toast("导入失败：" + errText(e), true);
+    }).finally(function () { setImportBusy(false); });
+  }
+
+  function showExternalAssetsWarning(assets) {
+    var warn = $("import-assets-warning");
+    if (assets && assets.length) {
+      warn.hidden = false;
+      warn.innerHTML = "检测到对工具目录外资源的引用，导入后这些资源将无法加载：<ul><li>" +
+        assets.map(esc).join("</li><li>") + "</li></ul>";
+    } else {
+      warn.hidden = true;
+    }
   }
 
   on("import-tool", "click", function () {
@@ -1118,27 +1260,10 @@
     if (currentTool) { showView("tool-view"); }
     else { showView("content-home"); }
   });
+  on("import-pick", "click", pickImportFile);
   on("import-run", "click", function () { runImport(false); });
   on("import-confirm", "click", function () { runImport(true); });
 
-  on("import-file", "change", function () {
-    var input = $("import-file");
-    var file = input.files && input.files[0];
-    var label = $("import-file-name");
-    if (file) {
-      label.textContent = file.name + "（" + Math.max(1, Math.round(file.size / 1024)) + " KB）";
-      label.classList.add("set");
-      // 用文件名预填工具名（去掉扩展名）
-      if (!$("import-name").value.trim()) {
-        $("import-name").value = file.name.replace(/\.(html?|htm)$/i, "");
-      }
-    } else {
-      label.textContent = "未选择文件";
-      label.classList.remove("set");
-    }
-    pendingImport = null;
-    $("import-review").hidden = true;
-  });
   ["import-name", "import-desc", "import-category", "import-glyph"].forEach(function (id) {
     on(id, "input", function () {
       pendingImport = null;
@@ -1298,10 +1423,16 @@
   /* 点击菜单外的第一下只收起菜单，不触发下面条目的动作（捕获阶段拦截） */
   document.addEventListener("click", function (e) {
     if (!openMenuState) { return; }
-    if (openMenuState.li && typeof openMenuState.li.contains === "function" && openMenuState.li.contains(e.target)) { return; }
+    var menuEl = openMenuState.menuEl;
+    if (menuEl && typeof menuEl.contains === "function" && menuEl.contains(e.target)) { return; }
     closeItemMenu();
     if (e.preventDefault) { e.preventDefault(); }
     if (e.stopPropagation) { e.stopPropagation(); }
+  }, true);
+
+  /* 列表滚动时浮层会脱离条目位置：直接收起，避免悬空 */
+  document.addEventListener("scroll", function () {
+    if (openMenuState) { closeItemMenu(); }
   }, true);
 
   /* ================= 内嵌工具栏 / 取消按钮 ================= */

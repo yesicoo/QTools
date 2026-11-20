@@ -24,6 +24,59 @@
     return (e && e.code ? e.code + "：" : "") + (e && e.message ? e.message : e);
   }
 
+  /* ================= 外观（主题） ================= */
+  var THEME_LABELS = { system: "跟随系统", light: "浅色", dark: "深色" };
+
+  function applyTheme(theme) {
+    try {
+      var root = document.documentElement;
+      if (theme === "light" || theme === "dark") { root.setAttribute("data-theme", theme); }
+      else { root.removeAttribute("data-theme"); }
+    } catch (_) { }
+  }
+
+  function renderTheme(theme) {
+    var select = $("theme-select");
+    if (select) { select.value = theme; }
+    var badge = $("theme-status");
+    if (badge) {
+      badge.textContent = "当前：" + (THEME_LABELS[theme] || theme);
+      badge.className = "badge";
+    }
+  }
+
+  function loadTheme() {
+    if (!host) { return; }
+    return host.callManager("manager.getTheme", {}).then(function (r) {
+      var theme = (r && r.theme) || "system";
+      renderTheme(theme);
+      applyTheme(theme);
+    }, function (e) { toast("读取主题失败：" + errText(e), true); });
+  }
+
+  on("theme-select", "change", function () {
+    if (!host) { return; }
+    var select = this;
+    var theme = select.value;
+    select.disabled = true;
+    host.callManager("manager.setTheme", { theme: theme }).then(function (r) {
+      var applied = (r && r.theme) || theme;
+      renderTheme(applied);
+      applyTheme(applied);
+      toast("外观已切换：" + (THEME_LABELS[applied] || applied));
+    }, function (e) {
+      toast("切换主题失败：" + errText(e), true);
+      loadTheme();
+    }).finally(function () { select.disabled = false; });
+  });
+
+  /* 主题在别处被改（例如命令行或其它窗口）时同步下拉框与徽标 */
+  try {
+    window.addEventListener("host-event", function (event) {
+      if (event && event.detail === "theme-changed") { loadTheme(); }
+    });
+  } catch (_) { }
+
   /* ================= 运行环境 ================= */
   function renderServerInfo(info) {
     $("set-platform").textContent = info.platform;
@@ -469,6 +522,7 @@
   if (host) {
     refreshServerInfo();
     loadAiConfig();
+    loadTheme();
     loadBackups();
     loadBackupConfig();
     loadIndexInfo();

@@ -12,7 +12,9 @@ internal sealed record CommandLineOptions(
     bool AcceptHighSeverity,
     string? DeleteToolId,
     bool DeleteStorage,
-    bool OpenSettings);
+    bool OpenSettings,
+    string? NotifyTitle = null,
+    string? NotifyBody = null);
 
 internal static class CommandLine
 {
@@ -32,6 +34,7 @@ internal static class CommandLine
           --yes                配合 --generate-tool：接受安全审查并保存、随后打开预览
           --delete-tool <id>   删除指定工具（不弹窗）；配合 --delete-storage 一并删除其存储
           --delete-storage     配合 --delete-tool：同时删除该工具的存储数据
+          --notify <标题> [正文]  弹出系统通知（Windows）；应用已在运行时转发给已运行实例
           --dev                开发者模式：开启右键菜单与 DevTools、详细日志
           --help               显示本帮助
         """;
@@ -49,6 +52,8 @@ internal static class CommandLine
         string? openToolId = null;
         string? generatePrompt = null;
         string? deleteToolId = null;
+        string? notifyTitle = null;
+        string? notifyBody = null;
 
         for (var i = 0; i < args.Length; i++)
         {
@@ -123,6 +128,30 @@ internal static class CommandLine
                     deleteToolId = args[i].Trim();
                     break;
 
+                case "--notify":
+                    if (i + 1 >= args.Length || string.IsNullOrWhiteSpace(args[++i]))
+                    {
+                        throw new FormatException("--notify 需要非空通知标题");
+                    }
+
+                    notifyTitle = args[i].Trim();
+                    if (notifyTitle.Length > 64)
+                    {
+                        throw new FormatException("--notify 标题不超过 64 字符");
+                    }
+
+                    // 正文可选：下一个参数不以 -- 开头时视为正文
+                    if (i + 1 < args.Length && !args[i + 1].StartsWith("--", StringComparison.Ordinal))
+                    {
+                        notifyBody = args[++i];
+                        if (notifyBody.Length > 256)
+                        {
+                            throw new FormatException("--notify 正文不超过 256 字符");
+                        }
+                    }
+
+                    break;
+
                 default:
                     throw new FormatException($"未知参数：{args[i]}");
             }
@@ -130,6 +159,7 @@ internal static class CommandLine
 
         return new CommandLineOptions(
             selfTest, fixedPort, rootDirectory, devMode, showHelp,
-            openToolId, generatePrompt, acceptHigh, deleteToolId, deleteStorage, openSettings);
+            openToolId, generatePrompt, acceptHigh, deleteToolId, deleteStorage, openSettings,
+            notifyTitle, notifyBody);
     }
 }

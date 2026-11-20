@@ -1,0 +1,57 @@
+/* ============================================================================
+ * QTools 注入到工具页面的主题基础样式（由宿主在 HTML 响应里自动插入）
+ *
+ * 1) 声明 color-scheme：显式浅色 / 深色由 html[data-theme] 决定，跟随系统时用媒体查询。
+ * 2) 旧工具兼容：页面完全没有主题能力（无 data-theme / prefers-color-scheme / color-scheme）
+ *    且当前为深色时，宿主会加 data-qtools-auto-dark，这里用「整体反色 + 色相回正」兜底，
+ *    图片 / 视频 / 画布 / iframe 再反一次还原原貌。
+ *
+ * 新工具请直接用 CSS 变量 + html[data-theme="dark"]（AI 生成提示词已内置该要求），
+ * 不要依赖这层兜底——反色只是让老页面在深色下可读。
+ * ============================================================================ */
+
+:root {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    color-scheme: dark;
+  }
+}
+
+/* ---------- 旧工具深色兜底（反色滤镜） ---------- */
+:root[data-qtools-auto-dark] {
+  color-scheme: light !important;
+  background: #f2f2f2 !important;
+  filter: invert(1) hue-rotate(180deg);
+}
+
+:root[data-qtools-auto-dark] img,
+:root[data-qtools-auto-dark] video,
+:root[data-qtools-auto-dark] canvas,
+:root[data-qtools-auto-dark] iframe,
+:root[data-qtools-auto-dark] svg image {
+  filter: invert(1) hue-rotate(180deg);
+}
+
+/* 兜底模式下的滚动条：反色滤镜不影响滚动条，单独给一套深色 */
+:root[data-qtools-auto-dark] ::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+:root[data-qtools-auto-dark] ::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+  background-color: #3a404a;
+}
+
+:root[data-qtools-auto-dark] ::-webkit-scrollbar-thumb:hover {
+  background-color: #4b525e;
+}

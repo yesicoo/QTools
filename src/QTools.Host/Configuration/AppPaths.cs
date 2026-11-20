@@ -67,6 +67,12 @@ public static class AppPaths
     /// <summary>索引程序隐藏列表（右键「从列表隐藏」的持久化记录）。</summary>
     public static string HiddenProgramsFilePath => Path.Combine(DataDirectory, "hidden-programs.json");
 
+    /// <summary>列表置顶记录（右键「置顶」的持久化顺序偏好）。</summary>
+    public static string PinnedItemsFilePath => Path.Combine(DataDirectory, "pinned-items.json");
+
+    /// <summary>导出包导入的临时解压目录（校验通过后才整体移入 tools/，失败不留半成品）。</summary>
+    public static string ImportStagingDirectory => Path.Combine(DataDirectory, "import-staging");
+
     /// <summary>索引程序图标缓存（绝不能放进 apps/，否则会被当成手动启动项扫进注册表）。</summary>
     public static string IconCacheDirectory => Path.Combine(DataDirectory, "icon-cache");
 

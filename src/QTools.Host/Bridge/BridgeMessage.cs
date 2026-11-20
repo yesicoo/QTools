@@ -104,6 +104,12 @@ public sealed class BridgeContext
     /// <summary>索引程序隐藏列表（manager.hideProgram / unhideProgram 用）。</summary>
     public Launcher.HiddenProgramStore? HiddenPrograms { get; init; }
 
+    /// <summary>列表置顶记录（manager.setItemPinned / launcherList 排序用）。</summary>
+    public Launcher.PinnedItemStore? PinnedItems { get; init; }
+
+    /// <summary>条目导出/导入包服务（manager.exportItem / pickImportFile / importItemPackage 用）。</summary>
+    public Backup.ItemPackageService? ItemPackages { get; init; }
+
     /// <summary>使用频次统计（列表排序 + 启动/打开计数用）。</summary>
     public Launcher.UsageStore? Usage { get; init; }
 

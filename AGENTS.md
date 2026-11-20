@@ -38,7 +38,7 @@
 # 构建（Debug，够日常开发）
 dotnet build
 
-# 单元测试（当前基线 445 个）
+# 单元测试（当前基线 486 个）
 dotnet test
 
 # 开发运行（会开 GUI 窗口）
@@ -51,9 +51,9 @@ dotnet run --project src/QTools.Host -r win-x64 -- --self-test
 dotnet publish src/QTools.Host/QTools.Host.csproj -c Release -r win-x64 -o publish/win-x64
 ```
 
-**改动后的最低验证线**：`dotnet build` 0 error 0 warning → `dotnet test` 全绿 → `--self-test` 26/26 → `dotnet publish` **0 AOT warning**。
+**改动后的最低验证线**：`dotnet build` 0 error 0 warning → `dotnet test` 全绿 → `--self-test` 27/27 → `dotnet publish` **0 AOT warning**。
 
-常用 CLI 开关（`Cli/CommandLine.cs` 是唯一真源）：`--self-test` `--port` `--root` `--open-tool <id>` `--open-settings` `--generate-tool` `--yes` `--delete-tool` `--delete-storage` `--dev` `--help`。
+常用 CLI 开关（`Cli/CommandLine.cs` 是唯一真源）：`--self-test` `--port` `--root` `--open-tool <id>` `--open-settings` `--generate-tool` `--yes` `--delete-tool` `--delete-storage` `--notify <标题> [正文]` `--dev` `--help`。
 
 ---
 
@@ -64,12 +64,13 @@ src/QTools.Host/
 ├── Program.cs              组合根：CLI 解析 → 路径 → 日志 → 原生库 → 单实例 → 起服务 → 分派
 ├── AppInfo.cs / PlatformInfo.cs
 ├── Ai/                     AiClient（OpenAI 兼容，含 SSE 流式）、AiOutputParser（容错解析）
-├── Backup/                 BackupService（zip 备份/恢复/导入）/ GitBackup（git 推送/远程恢复）
+├── Backup/                 BackupService（zip 备份/恢复/导入）/ GitBackup（git 推送/远程恢复）/ ItemPackageService（单条目 .qtools 导出/导入）
 ├── Bridge/                 桥接协议：BridgeDispatcher / Methods / BridgeMessage / PayloadReader
 ├── Cli/CommandLine.cs      手写参数解析（不引 System.CommandLine）
 ├── Configuration/          AppPaths（路径真源）/ AppConfig
 ├── Creator/                ToolCreator（AI 生成+更新）、ToolImporter（本地 HTML 导入）、ContentSecurityScanner
 ├── Launcher/               AppEntry / WebToolEntry / AppRegistry / AppStore / WebToolStore / AppLauncher / ProgramDiscovery
+│                           HiddenProgramStore（隐藏列表）/ PinnedItemStore（列表置顶）
 ├── Logging/Log.cs          滚动文件日志 + Key 脱敏
 ├── Native/NativeLibraries 内嵌原生库解压 + DllImportResolver
 ├── Security/               ISecretStore + DPAPI / AES-GCM 两套实现
@@ -236,8 +237,8 @@ tests/QTools.Tests/         22 个测试文件，纯单元 + 内存级集成
 `grid-template-columns: repeat(auto-fill, minmax(240px, 1fr))`，按窗口宽度自动排成 2/3/4 列卡片
 （条目加边框与底色），整块限宽 1180px 居中。断点取 540px 而不是 520px：侧栏内宽约等于窗口宽减 36px，
 520px 时内宽不足 2×240+7=487 只能排 1 列，卡片样式会先于多列出现。**约束**：不要给 `.nav-item` 写死宽度，也不要把
-badge / 使用次数拆成表格列——条目结构保持「图标 / `.nav-label` / `.nav-badge`」的自适应卡片，
-右键原位菜单、重命名、隐藏/删除都依赖 `li` 内的原位切换。内容窗口（`mode-content`）不受影响。
+badge / 使用次数拆成表格列——条目结构保持「图标 / `.nav-label` / `.nav-badge` / `.nav-uses`（行尾调用次数）/ `.nav-pin`」的自适应卡片，
+右键浮层菜单、重命名、隐藏/删除都锚定在 `li` 上（菜单是 fixed 浮层，见 7.26）。内容窗口（`mode-content`）不受影响。
 
 ### 7.16 关闭主窗口 ≠ 退出（Windows 托盘）
 
@@ -247,13 +248,15 @@ Windows 下主窗口 `Closing` 会先取消再收起到托盘（`Shell/TrayIcon.
 
 **DPI 坐标空间的坑（2026-11 修复）**：托盘消息线程运行在 96-DPI 虚拟化上下文，`GetCursorPos` 返回逻辑坐标；Photino 窗口所在 UI 线程是 DPI 感知的，`GetMonitorInfo` 返回物理像素，`MoveTo` 也按物理像素定位，而 `SetSize` 按 DIP→物理放大（150% 下 288 宽实际 432 像素）。在托盘线程取光标再拿到 UI 线程定位，会让弹层落在约 1/1.5 的位置（缩放屏上表现为「跑到屏幕中间」而不是托盘旁）。另外应用内实测 `GetScaleFactorForMonitor` 可能返回 140 而窗口 DPI 是 144，不可作为换算依据。**约束**：光标位置、显示器工作区、`GetDpiForMonitor` 一律在 UI 线程（`ShowTrayMenuAsync` 内）用物理坐标读取，弹层像素尺寸 = DIP × dpi/96，再交给 `TrayMenuPlacement.Compute` 与 `MoveTo`；不要在托盘线程换算坐标。
 
-### 7.17 窗口几何记忆（主窗口尺寸 + 内容窗口/工具窗口位置尺寸，config.json）
+### 7.17 窗口几何记忆（主窗口/内容窗口/设置窗口/工具窗口的位置尺寸，config.json）
 
-用户拖拽调整主窗口大小后，`RegisterSizeChangedHandler` 拿到的是 **DIP 尺寸**（与 `SetSize` 同一坐标空间，150% 缩放下 1700 物理像素对应 1133 DIP），防抖 500ms 后写入 `config.json` 的 `shell.mainWindowWidth/Height`；启动时 `MainWindowSize.Resolve` 校验范围（280×480 ～ 8000×6000，越界按维度回退默认 340×720），再按当前显示器工作区（DIP）夹一次。
+主窗口同时记住 **位置 + 尺寸**：`LocationChanged` / `SizeChanged` 都走 `ScheduleMainWindowSave`，防抖 500ms 后由 `CaptureWindowBounds` 采集（Windows 物理像素位置 + DIP 尺寸，其他平台 Photino 坐标）、关闭时同步保存到 `shell.mainWindowLeft/Top/Width/Height`。启动时 `MainWindowSize.Resolve` 校验尺寸（280×480 ～ 8000×6000，越界按维度回退默认 340×720）并按工作区夹一次，`ResolveSavedWindowOrigin` 校验位置（显示器已拔掉则回退 `Center()`），恢复在首次显示前用 `MoveTo` / `SetLeft/SetTop` 完成。**约束**：`MainWindowSize` 只负责尺寸校验；几何落盘必须一次写全四项，不要拆成尺寸/位置两次 Load→Save（并发会互相覆盖）。
 
 内容窗口（`OpenContentAsync`）另外记住 **位置 + 尺寸**：`LocationChanged` / `SizeChanged` 防抖 500ms、关闭窗口时立即写入 `shell.contentWindowLeft/Top/Width/Height`；恢复时 `ContentWindowBounds.ResolveSize` 校验尺寸（560×420 ～ 8000×6000，默认 920×680），`ResolveContentWindowOrigin` 在 Windows 上用 `MonitorFromPoint(MONITOR_DEFAULTTONULL)` 探测保存点是否仍在任一显示器上——失效则回退 `WindowDock` 贴主窗口。**平台差异**：Windows 位置用物理像素（`MoveTo` 按物理像素定位，见 7.16 DPI 坑）、尺寸用 DIP（`SetSize` 按窗口 DPI 放大），保存走 Win32 `GetWindowRect` + 显示器 DPI 折算；macOS/Linux 没有跨平台显示器探测，改用 Photino 的 `Left/Top/Width/Height` 采集、`SetLeft/SetTop` 恢复（与采集同一坐标空间），不做工作区校验/夹取，位置若落在已拔掉的屏幕上无法自动纠正（**代码已写，未真机验证**）。**约束**：最大化/最小化/全屏状态不落盘；复用已打开的内容窗口时不要再 `DockContentToMain`（否则用户拖好的位置每次打开工具都会被重置）；所有 `Persist*` 必须「Load → with 更新 → Save」，不要整份覆盖配置。
 
 **独立工具窗口按 toolId 单独记忆**（`OpenToolAsync`）：写入 `shell.toolWindowStates.{toolId}.left/top/width/height`，坐标约定与内容窗口相同（Windows 物理像素 + DIP，其他平台 Photino 坐标）；`LocationChanged` / `SizeChanged` 按 toolId 分别防抖 500ms（`_toolWindowSaveSerials`，不同工具互不覆盖），`Closing` 时同步保存。恢复时 `ToolWindowBounds.ResolveSize` 校验尺寸（280×220 ～ 8000×6000，越界按维度回退该工具 manifest 的 `window.width/height`），`ResolveSavedWindowOrigin` 在 Windows 上探测保存点是否仍在任一显示器上——失效则回退 `Center()` 居中打开（其他平台直接信任保存值）。打开恢复必须在首次 `Show()` 前完成（Windows `MoveTo`，其他平台 `SetLeft/SetTop`），且构窗时 `SetUseOsDefaultLocation(false)`，否则系统默认位置会覆盖。**约束**：不要复用内容窗口的 `ContentWindowBounds` 默认值（其最小值 560×420 会把 320～520 宽的小工具尺寸判为无效）；最大化/最小化不落盘，恢复的是上次普通态几何。
+
+**设置窗口同样记忆位置 + 尺寸**（`OpenSettingsAsync`，`SettingsWindowBounds` 默认 680×760、下限 560×520）：写入 `shell.settingsWindowLeft/Top/Width/Height`，`LocationChanged` / `SizeChanged` 防抖 500ms、`Closing` 同步保存；恢复在 `Show()` 前完成，位置失效回退 `Center()`。构窗必须 `SetUseOsDefaultLocation(false)`，否则系统默认位置会盖掉 `MoveTo`。
 
 ### 7.18 AI 自动识别 OpenAI / Anthropic 两种兼容端点，思考内容要实时透传
 
@@ -297,7 +300,7 @@ AI 流式输出是未解析的 JSON 源码，正文里的换行是 `\n` 两个�
 
 ### 7.23 小工具一律独立窗口打开，管理窗口只承载创建/导入/版本
 
-主窗口统一列表与托盘菜单点击小工具 → `manager.openTool`（独立窗口），**不再**走 `manager.openContent("tool")` 内嵌显示。AI 创建/导入保存成功后 `openTool` 并收起管理窗口；版本管理由独立窗口收缩菜单经 `window.openVersionManager` 打开内容窗口的 `view=version`，该路由的「关闭」按钮直接 `closeContent`。
+主窗口统一列表与托盘菜单点击小工具 → `manager.openTool`（独立窗口），**不再**走 `manager.openContent("tool")` 内嵌显示。AI 创建/导入保存成功后 `openTool` 并收起管理窗口；版本管理由独立窗口收缩菜单经 `window.openVersionManager` 打开内容窗口的 `view=version`，主窗口列表的小工具右键菜单也提供「版本管理」直接进入同一路由；该路由的「关闭」按钮直接 `closeContent`。
 
 **约束**：不要恢复「点击工具 → 打开内容窗口内嵌」的旧入口；内容窗口保留给 `create / import / web / version`，以及直接 URL `view=tool` 的兼容测试路径。
 
@@ -317,12 +320,104 @@ AI 流式输出是未解析的 JSON 源码，正文里的换行是 `\n` 两个�
   （`ToolShortcutTests`）；功能验收必须用 ShellExecute 真双击（含中文名与已在托盘运行两种状态）。
 - **不覆盖用户的同名桌面文件**：同名 `.lnk` 已存在时，参数匹配（`--open-tool <id>` 的 UTF-16 字节）才视为自己的并原地刷新；
   否则顺延「名称 (2).lnk」。文件名会替换 Windows 非法字符、去掉结尾点/空格、规避 CON/NUL/COM1 等保留名。
-- **单实例转发**：快捷方式在 QTools 已运行（常在托盘）时会产生第二个进程，`Program` 在单实例判断后经命名管道
-  `QTools.Host.OpenTool`（`PipeOptions.CurrentUserOnly`）把 toolId 交给主实例并立即退出；主实例在消息循环外启动监听，
-  由 UI 线程 `OpenToolAsync` 开窗，回 `OK` / `ERR`。转发失败必须 `MessageBoxW` 明确提示，不能静默退出。
+- **单实例转发**：快捷方式/命令行在 QTools 已运行（常在托盘）时会产生第二个进程，`Program` 在单实例判断后经命名管道
+  `QTools.Host.OpenTool`（`PipeOptions.CurrentUserOnly`）把一行 JSON `SingleInstanceMessage { cmd, id?, title?, body? }`
+  交给主实例并立即退出（`cmd` = `open-tool` / `notify`，见 7.27）；主实例在消息循环外启动监听，
+  `open-tool` 由 UI 线程 `OpenToolAsync` 开窗、`notify` 走 `ShellHost.Notify`，回 `OK` / `ERR`。
+  转发失败必须 `MessageBoxW` 明确提示，不能静默退出；旧版纯 toolId 行会解析失败并回 `ERR`（允许）。
 - **仅 Windows**：创建接口在非 Windows 返回 `PLATFORM_NOT_SUPPORTED`；macOS/Linux 未实现、未验证。
 
 回归测试见 `ToolShortcutTests` 与 `tests/app.test.cjs`（右键菜单「创建桌面快捷方式」）。
+
+### 7.25 单条目导出包（.qtools）：当前运行版本，导入自动识别
+
+小工具 / 手动启动项 / 在线工具右键「导出」→ 原生保存对话框 → `.qtools`（本质是 zip）。
+包根是 `qtools-export.json`（`ItemExportManifest`：kind / id / name / version / 导出时间 / 应用版本），
+载荷沿用数据目录布局：`tools/{id}/**`、`apps/{id}/app.json`、`webtools/{id}/web.json`。
+**小工具只导当前运行版本**——枚举 `tools/{id}` 时跳过一切点号前缀目录，绝不带上 `.versions` 历史。
+本机索引程序（program）不可导出（`EXPORT_KIND_INVALID`），它们由系统安装状态决定。
+
+导入页的「选择文件」走原生对话框（`manager.pickImportFile`），后端按扩展名/包清单自动识别：
+HTML → 读回内容并复用既有 `manager.importTool` 审查流程；`.qtools`/`.zip` 且含 `qtools-export.json`
+→ `manager.importItemPackage`。**整机备份包（backup.json）必须明确拒绝并指引到设置页**，不要静默当成导出包。
+导入小工具时重跑 `ContentSecurityScanner.Scan`（高危项需 `acceptHighSeverity` 二次确认，Fatal 直接拒绝），
+权限取「包内声明 ∪ 代码实际检测」以保留原能力；工具 id 被占用时用 `ToolImporter.GenerateToolId(name)` 顺延；
+解压先落到 `data/import-staging/{guid}`，校验通过才整体移入 `tools/`，失败不留半成品。
+`BackupService.ValidateArchive` 的白名单与本包不同（本包额外拒绝点号前缀段），不要合并两套校验。
+回归测试见 `ItemPackageTests`（导出排除 .versions、往返保真、id 顺延、高危确认、穿越/点号路径拒绝）。
+
+### 7.26 列表「置顶」是排序偏好；右键菜单是 fixed 浮层，不撑大列表
+
+`PinnedItemStore`（`data/pinned-items.json`，键 `kind:id`）只影响统一列表排序：`LauncherListBuilder`
+先按 `Pinned` 降序，再按使用次数/最近使用/名称。**不要与窗口级「置顶」（Topmost，见 7.22）混为一谈**——
+后者是 Photino 窗口属性，前者只是列表顺序；当前右键入口只对小工具开放（program 由索引决定展示，接口层也拒绝）。
+删除条目时顺手 `Forget`，避免残留键无限增长。
+
+右键菜单自 2026-11 起是 **`position: fixed` 浮层**（`.nav-menu`，定位在鼠标处并夹在视口内），
+条目按钮**始终可见**、列表行高不变——历史上的「原位展开」会隐藏按钮并撑高该行，已被替换。
+**约束**：菜单节点仍挂在对应 `li` 里（重渲染时随之作废，`closeItemMenu` 只隐藏不销毁；再次打开前先清掉旧节点）；
+外部点击判定用 `menuEl.contains(e.target)`（不能用 `li.contains`，否则点条目按钮不会收起菜单）；
+`document` 的捕获阶段 `scroll` 要收起菜单，避免浮层悬空；`position: fixed` 依赖祖先没有
+transform/filter/contain（当前 `.sidebar/.layout` 都没有，加这类样式会改变定位基准）。
+回归测试见 `tests/app.test.cjs`（浮层定位夹取、滚动收起、置顶/取消置顶、导出）。
+
+### 7.27 主题三层取色 + 系统通知只走 Windows 托盘气泡
+
+**界面主题**（`shell.theme` = `system` / `light` / `dark`，设置页「外观」）分三层生效，缺一层都会造成闪白或不同步：
+
+1. **首屏**：`LocalServer.HtmlTransformAsync` 在处理宿主页面（`toolId == "__host__"`，含 index / settings / tray-menu）时
+   读取 `config.json` 的 `Shell.Theme`，经 `HtmlRewriter.InjectThemeAttribute` 给 `<html>` 注入
+   `data-theme="light|dark"`（system 不注入）。注入发生在桥接脚本注入之后、写响应之前。
+2. **CSS**：`app.css` / `tray-menu.css` 的 `:root` 是浅色变量，`:root[data-theme="dark"]` 是深色变量，
+   系统深色用 `@media (prefers-color-scheme: dark) { :root:not([data-theme]) { … } }` 兜底——
+   两套深色变量必须同步维护；`color-scheme` 也要跟着切，否则原生控件仍是错的配色。
+3. **运行期**：`theme.js`（挂在三个宿主页面）启动即 `manager.getTheme` 校正一次，收到
+   `host-event: theme-changed` 再校正；`manager.setTheme`（hostOnly）校验取值 → 保存配置 → `ShellHost.NotifyThemeChanged()`
+   向主窗口 / 内容窗口 / 设置窗口 / 托盘弹层广播事件。设置页自己的下拉框在收到事件时会重新 `getTheme` 同步。
+   工具页面**不参与**宿主换肤（工具自带配色），不要往工具页注入 `theme.js` 或 `data-theme`。
+
+**系统通知**（仅 Windows）：`TrayIcon.Notify` 可跨线程调用——入 `ConcurrentQueue` 后向托盘消息窗口
+`PostMessage(0x8000+21)`，由托盘线程用 `Shell_NotifyIcon(NIM_MODIFY, NIF_INFO)` 弹气泡
+（标题 ≤64 / 正文 ≤256，UTF-16 代理对安全截断；级别 info/warning/error → `dwInfoFlags` 1/2/3）。
+`ShellHost.Notify` 是唯一出口（托盘未创建返回 false）；`manager.notify`（hostOnly）校验 `title` 必填、
+`body` 可选、`level` 取值，失败给 `NOTIFY_UNAVAILABLE`。命令行 `--notify <标题> [正文]`：
+QTools 已在运行时经单实例管道转发给主实例；未运行时临时创建托盘图标、弹通知、保持约 6 秒后退出（退出码 8 = 失败）。
+**约束**：不要在 UI 线程同步等待气泡、不要直接 `Shell_NotifyIcon` 而不加锁（托盘线程独占）；非 Windows 明确报不可用。
+**验证状态**：API 调用、日志与转发链路已用真实进程验证成功；本机 Windows 通知设置会抑制气泡/Toast
+（同一台机器上 WinForms `NotifyIcon.ShowBalloonTip` 与 WinRT Toast 同样不显示，属环境因素），
+视觉呈现需在「通知已开启」的机器上确认。
+
+**工具页面同样跟随主题**：`LocalServer.HtmlTransformAsync` 对 `/tools/*` 页面注入 `tool-theme.css` +
+`tool-theme.js`，并在 `<html>` 上写 `data-theme`（显式主题）、`data-qtools-theme`、`data-qtools-themed`
+（页面是否有主题能力）与 `data-qtools-auto-dark`（旧工具的深色兜底）。
+- 页面自带 `data-theme` / `prefers-color-scheme` / `color-scheme` 之一 → `themed=1`，只切换 `data-theme`，
+  由页面自己的深色样式生效；AI 生成提示词已强制使用「CSS 变量 + `:root[data-theme="dark"]` + 媒体查询兜底」写法。
+- 三者都没有的旧工具 → 深色时加 `data-qtools-auto-dark`，`tool-theme.css` 用
+  `filter: invert(1) hue-rotate(180deg)` 反色，图片/视频/画布/iframe 再反一次还原；这是兜底，
+  新增工具不要依赖它（有 `position: fixed` 的页面可能出现滚动行为差异）。
+- 运行期切换：`ShellHost.NotifyThemeChanged(theme)` 把 `theme-changed` 广播到工具窗口；
+  `tool-theme.js` 收到后调用 `window.host.theme.get()`（`theme.get` 是**非 hostOnly** 的只读方法，任何工具可调）
+  更新属性；跟随系统时会监听 `prefers-color-scheme` 同步反色兜底。
+- **桥接脚本只注入一次**：`ToolStaticFileMiddleware` 现在只负责把 HTML 原样写出，桥接 / 窗口控制条 / 主题
+  统一由 `LocalServer.HtmlTransformAsync` 注入——历史上两层都注入导致工具页 bridge.js 执行两次。
+
+**原生标题栏**：`Shell/WindowTheme.cs` 用 `DwmSetWindowAttribute(DWMWA_USE_IMMERSIVE_DARK_MODE=20，失败退回 19)`
+让窗口标题栏跟随主题，创建窗口和主题切换时应用；非 Windows 空操作（标题栏跟随系统）。
+Win10 上只改 DWM 属性不会立即重绘标题栏（`SWP_FRAMECHANGED`、`RedrawWindow`、`WM_THEMECHANGED`
+在本机 19045 实测全部无效）。`refreshFrame` 的做法是同步连发一对 `WM_NCACTIVATE`：
+先切到相反的激活态，再切回真实状态（活动窗口 FALSE→TRUE，后台窗口 TRUE→FALSE），
+强制 DWM 重画非客户区。窗口不移动、不隐藏、不改尺寸、不抢焦点，也不会触发页面 resize，
+最大化窗口同样有效。历史上用过「`ShowWindow(SW_HIDE)` + `Thread.Sleep(20)` + `SW_SHOWNOACTIVATE`」，
+虽然颜色能刷新，但打开子窗口时整窗会明显闪一下（用户实测反馈），**不要改回去**。
+窗口每次激活还会重申一次属性（系统主题在运行期变化时自动纠正）。
+
+**新建子窗口的首帧也要刷新**：工具 / 内容 / 设置 / 在线工具窗口在 `Show()` 前设 DWM 属性并不够，
+Created 回调里设置也仍会沿用系统默认标题栏颜色，用户得让窗口失焦再获得焦点才变正确（历史 bug）。
+约束：这些运行期创建的子窗口在 `Show()` 之后立刻再执行一次 `ApplyWindowChrome(window, refreshFrame: true)`
+（复用已打开的内容窗口时同样要刷新）；主窗口在 Startup 与首次内容加载后各刷新一次。
+刷新统一走上面的 `WM_NCACTIVATE` 方案，不能再引入隐藏/重显或 resize。
+
+回归测试见 `ThemeAndNotifyTests`、`HtmlRewriter.InjectToolTheme` 断言与 `tests/app.test.cjs`（theme.js / tool-theme.js 实时换肤）。
 
 ---
 
@@ -337,6 +432,7 @@ AI 流式输出是未解析的 JSON 源码，正文里的换行是 `\n` 两个�
 密钥存储同理：Windows 用 DPAPI，macOS/Linux 走 AES-GCM 加密文件兜底（Keychain / libsecret 原生互操作**故意未实现**）。
 
 系统托盘同理：**仅 Windows 实现**（`Shell/TrayIcon.cs`，Shell_NotifyIcon + 独立消息线程）。Windows 下关闭主窗口默认收起到托盘，托盘「退出 QTools」才真正结束进程；macOS/Linux 无托盘，关闭即退出。
+系统通知也**仅 Windows**（复用托盘图标，见 7.27）：macOS/Linux 的 `manager.notify` 返回 `NOTIFY_UNAVAILABLE`，`--notify` 退出码 8；未实现原生通知中心，不要声称支持。
 
 窗口几何记忆：Windows 走 Win32（物理像素 + DPI 折算）**已真机验证**；macOS/Linux 走 Photino `Left/Top/Width/Height` 兜底（同一坐标空间采集与恢复），**代码已写、未真机验证**，且无法探测显示器布局。钉住的位置锁定（`WindowPinLock`）**仅 Windows**，macOS/Linux 只锁缩放。
 
@@ -368,8 +464,8 @@ AI 流式输出是未解析的 JSON 源码，正文里的换行是 `\n` 两个�
 5. **PowerShell 里 `"$(id)"` 会被当子表达式求值**。生成含 `$(...)` 的代码时用编辑工具写文件，别用字符串拼接。
 
 **测试分层**：
-- `dotnet test`：纯单元 + 内存级集成（真实 `BridgeDispatcher.DispatchAsync` + 临时目录）。当前 445 个（含内嵌凭证、索引程序隐藏、拼音首字母/全拼检索、备份/Git、流式取消链路、索引原子覆盖、内容窗口初始定位、在线工具、原位菜单定位、小工具/在线工具重命名、统一属性字段、托盘菜单规划与弹层定位、主窗口尺寸记忆、内容窗口位置/尺寸记忆、AI 端点识别与双协议流式、使用次数播种、窗口置顶/钉住、桌面快捷方式）。
-- `node --test tests/*.cjs`：前端行为级测试（vm 沙箱 + DOM shim，跑 `app.js`/`bridge.js`/示例工具页面）。当前 137 个。注意：vm 沙箱里创建的对象带另一套原型，断言前先用 `JSON.parse(JSON.stringify(...))` 归一化。
+- `dotnet test`：纯单元 + 内存级集成（真实 `BridgeDispatcher.DispatchAsync` + 临时目录）。当前 486 个（含内嵌凭证、索引程序隐藏、拼音首字母/全拼检索、备份/Git、流式取消链路、索引原子覆盖、内容窗口初始定位、在线工具、浮层菜单定位、小工具/在线工具重命名、统一属性字段、托盘菜单规划与弹层定位、主窗口/内容窗口/设置窗口/工具窗口几何记忆、AI 端点识别与双协议流式、使用次数播种、窗口置顶/钉住、桌面快捷方式、列表置顶排序、条目导出包往返/安全边界、主题规范化/HTML 注入/桥接持久化、通知校验与单实例消息、工具页主题标记）。
+- `node --test tests/*.cjs`：前端行为级测试（vm 沙箱 + DOM shim，跑 `app.js`/`bridge.js`/示例工具页面）。当前 154 个（含 theme.js / tool-theme.js 实时换肤、右键版本管理）。注意：vm 沙箱里创建的对象带另一套原型，断言前先用 `JSON.parse(JSON.stringify(...))` 归一化。
 - `--self-test`：真起 Kestrel，27 项 HTTP 断言（host 头校验、路径穿越、工具资源、设置页、品牌图标；其中工具资源每工具 3 项，数量随已装工具数浮动）。
 - ad-hoc 验收脚本：**不入库**，历史脚本在 `%TEMP%`。GUI 真机验证可用 WebView2 远程调试：启动时设 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=<port> --remote-debugging-address=127.0.0.1`，再用 CDP（`/json/list` + WebSocket）注入 JS / 截图；日志断言（`-> ok`、`已打开...窗口`）仍是最轻量的手段。
 
@@ -378,7 +474,7 @@ AI 流式输出是未解析的 JSON 源码，正文里的换行是 `\n` 两个�
 ## 11. 提交前检查清单
 
 - [ ] `dotnet build` → 0 error / 0 warning
-- [ ] `dotnet test` → 全绿（当前基线 **445**）
+- [ ] `dotnet test` → 全绿（当前基线 **486**）
 - [ ] `node --test tests/app.test.cjs` → 全绿（改过 `app.js` 时必须跑）
 - [ ] `--self-test` → **27 PASS / 0 FAIL**，退出码 0
 - [ ] `dotnet publish -c Release` → **0 AOT warning**
