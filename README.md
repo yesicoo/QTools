@@ -129,7 +129,7 @@ AI 接口自动识别 **OpenAI 兼容**与 **Anthropic 兼容**两种端点：De
 
 ## 快速开始
 
-环境要求：**.NET 10 SDK**（`global.json` 锁定 10.0.100+）。
+环境要求：**.NET 10 SDK**（`global.json` 锁定 10.0.400+）。
 
 ```bash
 # 构建 + 开发运行（GUI 窗口）

@@ -20,7 +20,7 @@
 
 | 项 | 取值 | 说明 |
 |---|---|---|
-| 运行时 | **.NET 10** | `global.json` 锁 `10.0.100` + `rollForward: latestMinor` |
+| 运行时 | **.NET 10** | `global.json` 锁 `10.0.400` + `rollForward: latestFeature`（避开 10.0.100 自带 ILCompiler 10.0.0 的 NU1903 高危漏洞） |
 | 发布 | **Native AOT + 单文件 + SelfContained** | `PublishAot` / `PublishSingleFile` / `SelfContained` |
 | 桌面壳 | **PhotinoX 5.4.0** | Photino.NET 的活跃维护分叉；命名空间仍是 `Photino.NET` |
 | 本地服务 | **Kestrel**（ASP.NET Core） | 只绑 `127.0.0.1`，随机端口 |

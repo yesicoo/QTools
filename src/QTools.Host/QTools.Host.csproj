@@ -45,12 +45,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- SDK 10.0.100 内置 ILCompiler 10.0.0 有已知高危漏洞（NU1903），锁到已修复补丁版；
-         用 KnownILCompilerPack 覆盖是官方推荐方式，额外加 PackageReference 反而会触发版本冲突警告 -->
-    <KnownILCompilerPack Update="Microsoft.DotNet.ILCompiler" ILCompilerPackVersion="10.0.14" />
-  </ItemGroup>
-
-  <ItemGroup>
     <!-- 宿主自带 Kestrel：用框架引用引入 ASP.NET Core（无需 Web SDK 的网站约定） -->
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
