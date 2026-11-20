@@ -15,12 +15,26 @@
 最新单文件版本见 [Releases](https://github.com/yesicoo/QTools/releases)：下载 `QTools-<版本>-win-x64.exe`（附 SHA256），双击即可运行。
 发布由推送 `v*` 标签自动触发（`.github/workflows/release.yml`，构建 + 测试 + AOT + 自检通过后才上传），也可在 Actions 页手动触发。
 
-## Rust + Tauri 2 移植版
+## Rust + Tauri 2 移植分支
 
-仓库中的 [`rust-tauri/`](rust-tauri/README.md) 是同一套前端的 Rust 重写实验：用 **Rust + Tauri 2** 替换 .NET/PhotinoX/Kestrel，
-复用 `src/QTools.Host/Assets` 与同一份数据目录，覆盖启动器、工具宿主、AI 工具工厂、主题、托盘、热键、通知、
-导入导出、备份等主要功能。当前**仅 Windows 真机验证**，macOS/Linux 未验证；发布形态暂为 `cargo build --release` 单 exe，
-未接入安装包 CI。详见 [rust-tauri/README.md](rust-tauri/README.md)。
+同一套前端与数据目录的 Rust 重写版在 [`rust-tauri-port`](https://github.com/yesicoo/QTools/tree/rust-tauri-port/rust-tauri) 分支；
+**主分支不包含 `rust-tauri/` 目录**，代码、构建方式与最新验证结果见
+[移植版 README](https://github.com/yesicoo/QTools/blob/rust-tauri-port/rust-tauri/README.md)。
+
+| 对比项 | 本分支（.NET） | `rust-tauri-port`（Rust） |
+|---|---|---|
+| 桌面壳 | .NET 10 Native AOT + PhotinoX | Rust 1.99 + Tauri 2（WebView2） |
+| 本地 HTTP | 自研回环 TCP，仅 GET/HEAD | 同一方案用 Rust 重写，安全边界与 CSP 对齐 |
+| 前端 / 桥接 | `Assets/host-ui` + `window.host` | **复用同一份前端**，用 Tauri shim 兼容 `window.host` |
+| Release 体积（win-x64 单文件） | **8.89 MB** | **7.04 MB**（小约 1.85 MB / 21%） |
+| Windows 功能 | 基准实现 | 启动器、工具窗口、AI 工厂、主题、托盘、热键、通知、导入导出、快捷方式、置顶/钉住、备份/Git 均已移植 |
+| 系统通知实现 | 托盘气泡 | Windows 通知中心（Tauri notification 插件） |
+| 安装包 | GitHub Actions 产出单 exe + SHA256 | 目前 `cargo build --release` 单 exe；NSIS 打包尚未接入 CI |
+| 数据目录 | `%APPDATA%\QTools` | 同一目录，可直接共用工具/配置/备份 |
+| 验证平台 | Windows 真机 | **Windows 真机**；macOS / Linux 未验证 |
+
+> 两个版本的单实例保护各自独立，**不要同时运行**，否则会争用同一份数据目录与本地端口。
+> 移植版的功能边界、CLI、测试基线和已知限制见其分支 README。
 
 ## 平台支持（如实标注验证状态）
 

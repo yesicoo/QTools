@@ -30,7 +30,8 @@
 | zip 备份 / 恢复 / 导入；Git 远程推送 / 恢复（先 ls-remote 再浅克隆） | ✅ 代码完成 |
 | CLI：`--self-test` / `--port` / `--root` / `--open-tool` / `--open-settings` / `--generate-tool` / `--yes` / `--delete-tool` / `--delete-storage` / `--notify` | ✅ |
 | Windows DPAPI 密钥存储（文件名与 .NET 版一致）；AES-GCM 文件兜底 | ✅ Windows |
-| 单文件 / 安装包发布 | ⏳ 目前直接运行 `cargo build --release` 产物，未接入 CI 打包 |
+| Release 单 exe | ✅ Windows x64 约 7.04 MB（.NET AOT 版 8.89 MB，小约 21%） |
+| 安装包发布 | ⏳ 目前直接运行 `cargo build --release` 产物，未接入 CI 打包 |
 
 ---
 
@@ -90,7 +91,7 @@ WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS="--remote-debugging-port=9223 --remote-deb
 cargo build --release
 ```
 
-发布产物：`target/release/qtools-tauri.exe`（当前 Windows x64 实测约 **6.8 MB**，opt-level=z + LTO）。若需要 NSIS 安装包，可安装 Tauri CLI 后
+发布产物：`target/release/qtools-tauri.exe`（当前 Windows x64 实测约 **7.04 MB**（8,888,832 → 7,039,488 字节，约小 21%），opt-level=z + LTO）。若需要 NSIS 安装包，可安装 Tauri CLI 后
 `cargo tauri build`（`tauri.conf.json` 已配置 `nsis` 目标与共享品牌图标；本仓库 CI 尚未接入这一步）。
 
 ---
