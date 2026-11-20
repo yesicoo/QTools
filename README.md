@@ -37,7 +37,7 @@
 | Release 体积（win-x64 单文件） | **8.89 MB** | **7.04 MB**（小约 1.85 MB / 21%） |
 | Windows 功能 | 基准实现 | 启动器、工具窗口、AI 工厂、主题、托盘、热键、通知、导入导出、快捷方式、置顶/钉住、备份/Git 均已移植 |
 | 系统通知实现 | 托盘气泡 | Windows 通知中心（Tauri notification 插件） |
-| 安装包 | GitHub Actions 产出单 exe + SHA256 | 目前 `cargo build --release` 单 exe；NSIS 打包尚未接入 CI |
+| 安装包 | GitHub Actions 三实现一起产出单 exe + SHA256 | Release 工作流产出单 exe + SHA256；NSIS 安装包尚未接入 CI |
 | 数据目录 | `%APPDATA%\QTools` | 同一目录，可直接共用工具/配置/备份 |
 | 验证平台 | Windows 真机 | **Windows 真机**；macOS / Linux 未验证 |
 
@@ -59,13 +59,13 @@
 | Windows 功能 | 基准实现 | 启动器、工具窗口、AI 工厂、主题、托盘、热键、通知、导入导出、快捷方式、置顶/钉住、备份/Git 均已移植 |
 | 系统托盘 | HTML 圆角条目弹层 | mygo 原生菜单（前 N 项 + 打开 / 设置 / 退出） |
 | 系统通知实现 | 托盘气泡 | mygo Notification（Windows 同为托盘气泡） |
-| 安装包 | GitHub Actions 产出单 exe + SHA256 | 本地 `mygo build` 产出单 exe + NSIS；CI 尚未接入 |
+| 安装包 | GitHub Actions 三实现一起产出单 exe + SHA256 | Release 工作流产出单 exe + SHA256；NSIS 安装包仅本地 `mygo build` |
 | 数据目录 | `%APPDATA%\QTools` | 同一目录，可直接共用工具/配置/备份（窗口几何按 DIP 保存，高 DPI 下位置可能不同） |
 | 验证平台 | Windows 真机 | **Windows 真机**；macOS / Linux 未验证 |
 
 > 三种实现的单文件体积：**Rust 7.04 MB < .NET 8.89 MB < Go 15.5 MB**。
 > 三个版本的单实例保护各自独立，**不要同时运行**，否则会争用同一份数据目录与本地端口。
-> Go 版当前没有公开 Release 资产，需按分支 README 本地构建。
+> Go 版随主仓库 Release 一起提供单 exe；NSIS 安装包仍需按分支 README 本地构建。
 
 ## 平台支持（如实标注验证状态）
 
