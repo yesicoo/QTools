@@ -1,6 +1,5 @@
 using System.Reflection;
 using System.Text.RegularExpressions;
-using Microsoft.AspNetCore.Http;
 using QTools.Host.Logging;
 
 namespace QTools.Host.Server;
@@ -22,53 +21,54 @@ internal static partial class HostAssetEndpoint
     /// <summary>URL 路径（小写） → 内嵌资源名。</summary>
     private static readonly Dictionary<string, string> Resources = BuildIndex();
 
-    public static async Task HandleAsync(HttpContext context)
+    /// <summary>把 /__host__/ 之后的相对路径解析为内嵌资源；非法路径或不存在返回 false。</summary>
+    public static bool TryResolveResource(string relativePath, out string resourceName, out string normalized)
     {
-        var relativePath = context.Request.RouteValues["path"]?.ToString() ?? string.Empty;
-        var normalized = Normalize(relativePath);
-        if (normalized is null || !Resources.TryGetValue(normalized.ToLowerInvariant(), out var resourceName))
+        resourceName = string.Empty;
+        normalized = string.Empty;
+
+        var path = Normalize(relativePath);
+        if (path is null || !Resources.TryGetValue(path.ToLowerInvariant(), out var found))
         {
-            Log.Debug($"宿主资源不存在：{ResourcePrefix}{normalized?.Replace('/', '.') ?? relativePath}");
-            context.Response.StatusCode = StatusCodes.Status404NotFound;
-            return;
+            Log.Debug($"宿主资源不存在：{ResourcePrefix}{path?.Replace('/', '.') ?? relativePath}");
+            return false;
         }
 
+        resourceName = found;
+        normalized = path;
+        return true;
+    }
+
+    /// <summary>读取已解析的内嵌资源；资源缺失返回 null。</summary>
+    public static async Task<byte[]?> ReadResourceAsync(string resourceName)
+    {
         await using var stream = Assembly.GetManifestResourceStream(resourceName);
         if (stream is null)
         {
-            Log.Warn($"内嵌资源读取失败：{resourceName}");
-            context.Response.StatusCode = StatusCodes.Status404NotFound;
-            return;
+            return null;
         }
 
-        context.Response.ContentType = ContentTypes.For(normalized);
-        await stream.CopyToAsync(context.Response.Body);
+        using var buffer = new MemoryStream();
+        await stream.CopyToAsync(buffer).ConfigureAwait(false);
+        return buffer.ToArray();
     }
 
     /// <summary>
     /// 程序真实图标：手动启动项读 apps/{id}/icon.png，自动索引程序（idx- 前缀）读 data/icon-cache/{id}.png。
-    /// 不存在时 404，前端回退字母头像。
+    /// 不存在返回 false，前端回退字母头像。
     /// </summary>
-    public static async Task ServeAppIconAsync(HttpContext context)
+    public static bool TryResolveAppIcon(string appId, out string path)
     {
-        var appId = context.Request.RouteValues["appId"]?.ToString() ?? string.Empty;
+        path = string.Empty;
         if (!Launcher.AppEntryValidator.AppIdPattern().IsMatch(appId))
         {
-            context.Response.StatusCode = StatusCodes.Status404NotFound;
-            return;
+            return false;
         }
 
-        var path = appId.StartsWith("idx-", StringComparison.Ordinal)
+        path = appId.StartsWith("idx-", StringComparison.Ordinal)
             ? Path.Combine(Configuration.AppPaths.IconCacheDirectory, appId + ".png")
             : Path.Combine(Configuration.AppPaths.AppsDirectory, appId, "icon.png");
-        if (!File.Exists(path))
-        {
-            context.Response.StatusCode = StatusCodes.Status404NotFound;
-            return;
-        }
-
-        context.Response.ContentType = "image/png";
-        await context.Response.SendFileAsync(path);
+        return File.Exists(path);
     }
 
     /// <summary>枚举内嵌资源，建立 URL 路径映射（只收录一级目录下的文件，如 host-ui/index.html）。</summary>

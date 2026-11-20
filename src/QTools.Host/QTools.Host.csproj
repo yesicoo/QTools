@@ -45,11 +45,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- 宿主自带 Kestrel：用框架引用引入 ASP.NET Core（无需 Web SDK 的网站约定） -->
-    <FrameworkReference Include="Microsoft.AspNetCore.App" />
-  </ItemGroup>
-
-  <ItemGroup>
     <!-- 唯一外部依赖：PhotinoX（Photino.NET 维护分叉）+ PhotinoX.Native -->
     <PackageReference Include="PhotinoX" />
   </ItemGroup>

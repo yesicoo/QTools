@@ -106,9 +106,6 @@ internal static class Program
 
         try
         {
-            // ASPNETCORE_URLS 可能覆盖我们传入的监听地址；"只绑定 127.0.0.1" 的策略不允许被环境变量绕过
-            Environment.SetEnvironmentVariable("ASPNETCORE_URLS", null);
-
             using var server = LocalServer.Start(options.FixedPort);
             Log.Info($"本地静态服务已监听 http://127.0.0.1:{server.Port}/（仅回环，随机端口）；已加载 {server.Tools.GetAll().Count} 个工具");
 

@@ -1,18 +1,10 @@
+using System.Diagnostics;
 using System.Text;
-using System.Text.RegularExpressions;
-using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.Hosting.Server;
-using Microsoft.AspNetCore.Hosting.Server.Features;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
+using System.Text.Json;
 using QTools.Host.Ai;
 using QTools.Host.Bridge;
 using QTools.Host.Creator;
 using QTools.Host.Logging;
-using QTools.Host.Security;
 using QTools.Host.Serialization;
 using QTools.Host.Shell;
 using QTools.Host.Storage;
@@ -21,14 +13,14 @@ using QTools.Host.Tools;
 namespace QTools.Host.Server;
 
 /// <summary>
-/// Kestrel 本地静态服务：仅绑定 127.0.0.1、随机端口；只提供 /health 与只读静态资源，零写端点。
-/// 中间件顺序即安全边界（见设计文档 §6.2）。
+/// 本地静态服务：仅绑定 127.0.0.1、随机端口；只提供 /health 与只读静态资源，零写端点。
+/// 使用轻量 TCP HTTP/1.1 服务，避免为几个只读资源引入 ASP.NET Core/Kestrel。
 /// </summary>
-internal sealed partial class LocalServer : IDisposable
+internal sealed class LocalServer : IDisposable
 {
     private const string HostUiPrefix = "/__host__";
+    private const string ToolsPrefix = "/tools/";
     private const long MaxHtmlBytes = 8 * 1024 * 1024;
-    private const long MaxRequestBodyBytes = 1024 * 1024;
     private const long MaxFileBytes = 8 * 1024 * 1024;
 
     // 宿主管理界面 CSP 更严：不允许任何网络请求（能力全部走桥接）
@@ -36,9 +28,7 @@ internal sealed partial class LocalServer : IDisposable
         "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
         "img-src 'self' data:; connect-src 'none'; frame-src 'self'; base-uri 'none'; object-src 'none'; form-action 'none'";
 
-    private readonly WebApplication _app;
-    private readonly CancellationTokenSource _shutdown;
-    private int _port;
+    private LocalHttpServer? _http;
 
     /// <summary>工具注册表（桥接与静态文件服务共用）。</summary>
     public ToolRegistry Tools { get; }
@@ -103,11 +93,8 @@ internal sealed partial class LocalServer : IDisposable
     /// <summary>宿主配置。</summary>
     public Configuration.AppConfig Config { get; }
 
-    private LocalServer(WebApplication app, CancellationTokenSource shutdown)
+    private LocalServer()
     {
-        _app = app;
-        _shutdown = shutdown;
-
         Config = QTools.Host.Ai.ConfigStore.Load(QTools.Host.Configuration.AppPaths.ConfigFilePath);
         Secrets = Security.SecretStoreFactory.Create(QTools.Host.Configuration.AppPaths.DataDirectory);
 
@@ -154,49 +141,13 @@ internal sealed partial class LocalServer : IDisposable
             ItemPackages);
     }
 
-    public int Port => _port;
+    public int Port => _http?.Port ?? 0;
 
     public static LocalServer Start(int? fixedPort)
     {
-        var listenPort = fixedPort ?? 0;
-        var shutdown = new CancellationTokenSource();
-
-        var builder = WebApplication.CreateSlimBuilder(Array.Empty<string>());
-        builder.WebHost.UseUrls($"http://127.0.0.1:{listenPort}");
-        builder.WebHost.UseKestrel(options => options.Limits.MaxRequestBodySize = MaxRequestBodyBytes);
-
-        // 应用日志统一走自研 FileLogger；关闭框架日志，避免噪音与潜在敏感信息
-        builder.Logging.ClearProviders();
-        builder.Logging.SetMinimumLevel(LogLevel.Warning);
-
-        var app = builder.Build();
-        var server = new LocalServer(app, shutdown);
-
-        // 管道顺序即安全边界
-        app.Use(async (context, next) => await server.HostGuardAsync(context, next));
-        app.Use(async (context, next) => await server.RequestLogAsync(context, next));
-        app.Use(server.SecurityHeadersAsync);
-        app.Use(async (context, next) => await server.HtmlTransformAsync(context, next));
-
-        // /tools/** 安全静态文件（七条穿越防护）
-        app.Use(next => new ToolStaticFileMiddleware(
-            next,
-            server.Tools,
-            QTools.Host.Configuration.AppPaths.ToolsDirectory,
-            MaxFileBytes).InvokeAsync);
-
-        app.MapGet("/health", () => Results.Json(
-            new HealthResponse("ok", AppInfo.Version, server.Port),
-            AppJsonContext.Default.HealthResponse));
-
-        // 启动项真实图标（apps/{id}/icon.png，由 WindowsAppIcons 提取缓存）
-        app.MapGet($"{HostUiPrefix}/app-icon/{{appId}}", HostAssetEndpoint.ServeAppIconAsync);
-
-        app.Map($"{HostUiPrefix}/{{**path}}", HostAssetEndpoint.HandleAsync);
-
-        app.StartAsync(shutdown.Token).GetAwaiter().GetResult();
-
-        server._port = ResolvePort(app);
+        var server = new LocalServer();
+        var http = new LocalHttpServer(fixedPort ?? 0, server.HandleRequestAsync);
+        server._http = http;
 
         // 启动即扫描一次工具（首启会把内嵌示例工具释放到 tools/）
         SampleTools.EnsureSamples(QTools.Host.Configuration.AppPaths.ToolsDirectory);
@@ -211,147 +162,148 @@ internal sealed partial class LocalServer : IDisposable
         // 后台重建本机程序索引：旧索引在扫描期间持续可用，完成后原子覆盖并推送列表刷新
         server.ProgramIndex.StartBackgroundRefresh();
 
+        http.Start();
         return server;
     }
 
     public void Dispose()
     {
-        if (_shutdown.IsCancellationRequested)
+        _http?.Dispose();
+    }
+
+    // ---------------- HTTP 请求处理 ----------------
+
+    private async Task HandleRequestAsync(LocalHttpRequest request, LocalHttpResponse response)
+    {
+        var watch = Stopwatch.StartNew();
+        ApplySecurityHeaders(request.Path, response);
+
+        if (!IsAllowedHost(request.Host))
         {
+            Log.Warn($"Host 头校验失败，已拒绝：Host='{Log.Redact(request.Host)}' Path={request.Path}");
+            response.SetText(403, "Forbidden: invalid Host header");
+        }
+        else if (!request.IsGet && !request.IsHead)
+        {
+            response.Headers["Allow"] = "GET, HEAD";
+            response.SetText(405, "Method Not Allowed");
+        }
+        else
+        {
+            try
+            {
+                await RouteAsync(request, response).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"本地 HTTP 请求处理失败：{ex}");
+                response.SetText(500, "Internal Server Error");
+            }
+        }
+
+        watch.Stop();
+        Log.Info($"{request.Method} {request.Path} -> {response.StatusCode} ({watch.ElapsedMilliseconds}ms)");
+    }
+
+    private async Task RouteAsync(LocalHttpRequest request, LocalHttpResponse response)
+    {
+        if (request.Path.Equals("/health", StringComparison.OrdinalIgnoreCase))
+        {
+            var json = JsonSerializer.Serialize(
+                new HealthResponse("ok", AppInfo.Version, Port), AppJsonContext.Default.HealthResponse);
+            response.ContentType = "application/json; charset=utf-8";
+            response.Body = Encoding.UTF8.GetBytes(json);
             return;
         }
 
-        try
+        if (request.Path.StartsWith(HostUiPrefix + "/", StringComparison.OrdinalIgnoreCase))
         {
-            _shutdown.Cancel();
-            _app.StopAsync().GetAwaiter().GetResult();
-            _app.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            await ServeHostAssetAsync(request, response).ConfigureAwait(false);
+            return;
         }
-        catch (Exception ex)
+
+        if (request.Path.StartsWith(ToolsPrefix, StringComparison.OrdinalIgnoreCase))
         {
-            Log.Warn($"停止 Kestrel 时出现异常：{ex.Message}");
+            await ServeToolAsync(request, response).ConfigureAwait(false);
+            return;
         }
-        finally
-        {
-            _shutdown.Dispose();
-        }
+
+        response.SetText(404, "Not Found");
     }
 
-    // ---------------- 中间件 ----------------
-
-    /// <summary>Host 头校验（防 DNS rebinding）：只接受 127.0.0.1:{port} 与 localhost:{port}。</summary>
-    private Task HostGuardAsync(HttpContext context, RequestDelegate next)
+    private async Task ServeHostAssetAsync(LocalHttpRequest request, LocalHttpResponse response)
     {
-        var host = context.Request.Headers.Host.ToString();
-        if (IsAllowedHost(host))
+        var relative = request.Path[(HostUiPrefix.Length + 1)..];
+        if (relative.StartsWith("app-icon/", StringComparison.OrdinalIgnoreCase))
         {
-            return next(context);
-        }
-
-        Log.Warn($"Host 头校验失败，已拒绝：Host='{Log.Redact(host)}' Path={context.Request.Path}");
-        context.Response.StatusCode = StatusCodes.Status403Forbidden;
-        return context.Response.WriteAsync("Forbidden: invalid Host header");
-    }
-
-    private bool IsAllowedHost(string host)
-    {
-        if (string.IsNullOrEmpty(host))
-        {
-            return false;
-        }
-
-        var normalized = host.Trim().ToLowerInvariant();
-        return normalized == $"127.0.0.1:{_port}" || normalized == $"localhost:{_port}";
-    }
-
-    /// <summary>请求日志：只记 method/path/status/耗时，绝不记请求体（可能含用户数据）。</summary>
-    private async Task RequestLogAsync(HttpContext context, RequestDelegate next)
-    {
-        var watch = System.Diagnostics.Stopwatch.StartNew();
-        await next(context);
-        watch.Stop();
-        Log.Info($"{context.Request.Method} {context.Request.Path} -> {context.Response.StatusCode} ({watch.ElapsedMilliseconds}ms)");
-    }
-
-    private Task SecurityHeadersAsync(HttpContext context, Func<Task> next)
-    {
-        var headers = context.Response.Headers;
-        headers["X-Content-Type-Options"] = "nosniff";
-        headers["Referrer-Policy"] = "no-referrer";
-        headers["Cache-Control"] = "no-store";
-        headers["Content-Security-Policy"] = context.Request.Path.StartsWithSegments(HostUiPrefix, StringComparison.OrdinalIgnoreCase)
-            ? HostUiCsp
-            : ToolCspFor(context);
-
-        return next();
-    }
-
-    /// <summary>工具页面 CSP（含 manifest 的 allowEval / csp 覆盖）。</summary>
-    private string ToolCspFor(HttpContext context)
-    {
-        var path = context.Request.Path.Value ?? string.Empty;
-        const string prefix = "/tools/";
-        if (!path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-        {
-            return ToolStaticFileMiddleware.DefaultToolCsp;
-        }
-
-        var rest = path[prefix.Length..];
-        var slash = rest.IndexOf('/');
-        var toolId = slash < 0 ? rest : rest[..slash];
-
-        if (Tools.TryGet(toolId, out var tool) && tool is not null)
-        {
-            if (!string.IsNullOrWhiteSpace(tool.Manifest.Csp))
+            var appId = relative["app-icon/".Length..];
+            if (!HostAssetEndpoint.TryResolveAppIcon(appId, out var iconPath))
             {
-                return tool.Manifest.Csp!;
+                response.SetText(404, "Not Found");
+                return;
             }
 
-            return tool.Manifest.AllowEval
-                ? ToolStaticFileMiddleware.ToolCspAllowEval
-                : ToolStaticFileMiddleware.DefaultToolCsp;
+            response.ContentType = "image/png";
+            response.Body = await File.ReadAllBytesAsync(iconPath).ConfigureAwait(false);
+            return;
         }
 
-        return ToolStaticFileMiddleware.DefaultToolCsp;
+        if (!HostAssetEndpoint.TryResolveResource(relative, out var resourceName, out var normalizedPath))
+        {
+            response.SetText(404, "Not Found");
+            return;
+        }
+
+        var bytes = await HostAssetEndpoint.ReadResourceAsync(resourceName).ConfigureAwait(false);
+        if (bytes is null)
+        {
+            Log.Warn($"内嵌资源读取失败：{resourceName}");
+            response.SetText(404, "Not Found");
+            return;
+        }
+
+        var extension = Path.GetExtension(normalizedPath);
+        var isHtml = extension.Equals(".html", StringComparison.OrdinalIgnoreCase) ||
+                     extension.Equals(".htm", StringComparison.OrdinalIgnoreCase);
+        if (isHtml)
+        {
+            bytes = TransformHtml(bytes, "__host__");
+        }
+
+        response.ContentType = ContentTypes.For(normalizedPath);
+        response.Body = bytes;
     }
 
-    /// <summary>
-    /// HTML 响应重写：注入 window.host 桥接垫层。
-    /// PhotinoX 未提供托管侧 JS 注入 API，因此在 HTTP 层注入（设计文档 §5.3/§6.8）。
-    /// </summary>
-    private async Task HtmlTransformAsync(HttpContext context, RequestDelegate next)
+    private async Task ServeToolAsync(LocalHttpRequest request, LocalHttpResponse response)
     {
-        var originalBody = context.Response.Body;
-        await using var buffer = new MemoryStream();
-        context.Response.Body = buffer;
-
-        try
+        var file = await ToolStaticFiles.ReadAsync(
+            request.Path,
+            Tools,
+            QTools.Host.Configuration.AppPaths.ToolsDirectory,
+            MaxFileBytes).ConfigureAwait(false);
+        if (file is null)
         {
-            await next(context);
-        }
-        finally
-        {
-            context.Response.Body = originalBody;
-            buffer.Position = 0;
-        }
-
-        var contentType = context.Response.ContentType ?? string.Empty;
-        if (!contentType.Contains("text/html", StringComparison.OrdinalIgnoreCase) ||
-            context.Response.StatusCode != StatusCodes.Status200OK)
-        {
-            await buffer.CopyToAsync(originalBody);
+            response.SetText(404, "Not Found");
             return;
         }
 
-        if (buffer.Length > MaxHtmlBytes)
+        response.StatusCode = file.StatusCode;
+        response.ContentType = file.ContentType;
+        response.Body = file.IsHtml && file.StatusCode == 200
+            ? TransformHtml(file.Body, file.ToolId)
+            : file.Body;
+    }
+
+    /// <summary>HTML 注入：桥接垫层 + 主题契约（宿主页面只注入主题）。</summary>
+    private static byte[] TransformHtml(byte[] htmlBytes, string toolId)
+    {
+        if (htmlBytes.Length > MaxHtmlBytes)
         {
-            Log.Warn($"HTML 响应超过 {MaxHtmlBytes} 字节，跳过桥接注入：{context.Request.Path}");
-            await buffer.CopyToAsync(originalBody);
-            return;
+            Log.Warn($"HTML 响应超过 {MaxHtmlBytes} 字节，跳过注入：{toolId}");
+            return htmlBytes;
         }
 
-        var html = await new StreamReader(buffer, Encoding.UTF8, detectEncodingFromByteOrderMarks: true).ReadToEndAsync();
-        var toolId = ToolIdOf(context.Request.Path);
+        var html = Encoding.UTF8.GetString(htmlBytes);
         var theme = QTools.Host.Configuration.ThemeSetting.Normalize(
             QTools.Host.Ai.ConfigStore.Load(QTools.Host.Configuration.AppPaths.ConfigFilePath).Shell?.Theme);
 
@@ -370,52 +322,60 @@ internal sealed partial class LocalServer : IDisposable
                 transformed, theme, QTools.Host.Configuration.ThemeSetting.IsDarkNow(theme));
         }
 
-        var bytes = Encoding.UTF8.GetBytes(transformed);
-        context.Response.ContentLength = bytes.Length;
-        await originalBody.WriteAsync(bytes);
+        return Encoding.UTF8.GetBytes(transformed);
     }
 
-    /// <summary>从请求路径推导工具 ID（宿主侧权威来源，客户端自述的 toolId 仅作一致性记录）。</summary>
-    private static string ToolIdOf(PathString path)
+    private void ApplySecurityHeaders(string path, LocalHttpResponse response)
     {
-        var value = path.Value ?? string.Empty;
-        const string toolsPrefix = "/tools/";
-        if (value.StartsWith(toolsPrefix, StringComparison.OrdinalIgnoreCase))
+        response.Headers["X-Content-Type-Options"] = "nosniff";
+        response.Headers["Referrer-Policy"] = "no-referrer";
+        response.Headers["Cache-Control"] = "no-store";
+        response.Headers["Content-Security-Policy"] = CspFor(path);
+    }
+
+    private bool IsAllowedHost(string host)
+    {
+        if (string.IsNullOrEmpty(host))
         {
-            var rest = value[toolsPrefix.Length..];
-            var slash = rest.IndexOf('/');
-            var id = slash < 0 ? rest : rest[..slash];
-            return ToolIdPattern().IsMatch(id) ? id : "__host__";
+            return false;
         }
 
-        return "__host__";
+        var normalized = host.Trim().ToLowerInvariant();
+        return normalized == $"127.0.0.1:{Port}" || normalized == $"localhost:{Port}";
     }
 
-    [GeneratedRegex(ToolManifestValidator.ToolIdRegexPattern)]
-    private static partial Regex ToolIdPattern();
-
-    private static int ResolvePort(WebApplication app)
+    /// <summary>工具页面 CSP（含 manifest 的 allowEval / csp 覆盖）。</summary>
+    private string CspFor(string path)
     {
-        try
+        var isHost = path.Equals(HostUiPrefix, StringComparison.OrdinalIgnoreCase) ||
+                     path.StartsWith(HostUiPrefix + "/", StringComparison.OrdinalIgnoreCase);
+        if (isHost)
         {
-            var server = app.Services.GetRequiredService<IServer>();
-            var feature = server.Features.Get<IServerAddressesFeature>();
-            if (feature is not null)
+            return HostUiCsp;
+        }
+
+        if (!path.StartsWith(ToolsPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return ToolStaticFiles.DefaultToolCsp;
+        }
+
+        var rest = path[ToolsPrefix.Length..];
+        var slash = rest.IndexOf('/');
+        var toolId = slash < 0 ? rest : rest[..slash];
+
+        if (Tools.TryGet(toolId, out var tool) && tool is not null)
+        {
+            if (!string.IsNullOrWhiteSpace(tool.Manifest.Csp))
             {
-                foreach (var address in feature.Addresses)
-                {
-                    if (Uri.TryCreate(address, UriKind.Absolute, out var uri) && uri.Port is > 0 and <= 65535)
-                    {
-                        return uri.Port;
-                    }
-                }
+                return tool.Manifest.Csp!;
             }
-        }
-        catch (Exception ex)
-        {
-            Log.Warn($"通过 IServer 特性读取监听端口失败：{ex.Message}");
+
+            return tool.Manifest.AllowEval
+                ? ToolStaticFiles.ToolCspAllowEval
+                : ToolStaticFiles.DefaultToolCsp;
         }
 
-        throw new InvalidOperationException("无法确定 Kestrel 实际监听端口（IServerAddressesFeature 未提供地址）");
+        return ToolStaticFiles.DefaultToolCsp;
     }
+
 }

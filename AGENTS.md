@@ -9,7 +9,7 @@
 **QTools** —— 一个 Windows/Linux/macOS 桌面应用，同时是：
 
 1. **系统程序启动器**：用户手动添加系统里已安装的程序（`.exe` / `.lnk` / `.app` / `.desktop`），点一下就启动；也支持「添加网址」把常用 URL 保存为**在线工具**，点击用独立 WebView 窗口在线打开（不注入 `window.host`，与宿主能力隔离）。
-2. **小工具宿主**：托管纯静态 HTML/CSS/JS 小工具，经 `127.0.0.1` 上的 Kestrel 提供服务，用系统 WebView 打开，并通过注入的 `window.host` 向页面提供 AI / 存储 / 二进制文件 / 硬件捕获能力。
+2. **小工具宿主**：托管纯静态 HTML/CSS/JS 小工具，经 `127.0.0.1` 上的内置轻量 HTTP 服务提供，用系统 WebView 打开，并通过注入的 `window.host` 向页面提供 AI / 存储 / 二进制文件 / 硬件捕获能力。
 3. **AI 工具工厂**：用自然语言生成工具、对已有工具做 AI 优化更新，带版本管理与回滚。
 
 代码、注释、日志、UI 文案、文档**全部用中文**。新增代码请保持一致。
@@ -23,7 +23,7 @@
 | 运行时 | **.NET 10** | `global.json` 锁 `10.0.400` + `rollForward: latestFeature`（避开 10.0.100 自带 ILCompiler 10.0.0 的 NU1903 高危漏洞） |
 | 发布 | **Native AOT + 单文件 + SelfContained** | `PublishAot` / `PublishSingleFile` / `SelfContained` |
 | 桌面壳 | **PhotinoX 5.4.0** | Photino.NET 的活跃维护分叉；命名空间仍是 `Photino.NET` |
-| 本地服务 | **Kestrel**（ASP.NET Core） | 只绑 `127.0.0.1`，随机端口 |
+| 本地服务 | **内置轻量 HTTP/1.1**（`Server/LocalHttpServer.cs`） | 只绑 `127.0.0.1`，随机端口；不再依赖 ASP.NET Core/Kestrel |
 | JSON | **System.Text.Json 源生成，仅此一条路** | 反射序列化在 csproj 里已被硬禁用 |
 | 前端 | **原生 HTML/CSS/JS** | 无框架、无构建工具、无 CDN（指宿主自身页面；工具页面允许 CDN/外部资源） |
 | 目标 RID 默认 | `win-x64` | 可由 `-r` 覆盖 |
@@ -75,7 +75,7 @@ src/QTools.Host/
 ├── Native/NativeLibraries 内嵌原生库解压 + DllImportResolver
 ├── Security/               ISecretStore + DPAPI / AES-GCM 两套实现
 ├── Serialization/          AppJsonContext —— 全宿主唯一 JSON 上下文
-├── Server/                 LocalServer / ToolStaticFileMiddleware / HtmlRewriter / HostAssetEndpoint / SelfTest
+├── Server/                 LocalServer / LocalHttpServer / ToolStaticFiles / HtmlRewriter / HostAssetEndpoint / SelfTest
 ├── Shell/                  ShellHost（窗口生命周期）/ WindowRegistry（窗口→toolId 绑定）/ WindowPinLock（钉住）
 ├── Storage/ToolStorage.cs  按 toolId 隔离的 JSON 键值存储
 ├── Text/                   PinyinInitials（静态汉字→拼音表：首字母 + 全拼检索）
@@ -147,7 +147,7 @@ tests/QTools.Tests/         22 个测试文件，纯单元 + 内存级集成
 
 **约束**（三处缺一不可）：
 - `ToolVersionStore.VersionsDirectoryName = ".versions"`（点号前缀）
-- `Server/ToolStaticFileMiddleware` 规则 3b：拒绝点号前缀路径段
+- `Server/ToolStaticFiles` 规则 3b：拒绝点号前缀路径段
 - `ToolRegistry.Rescan` / `SampleTools` / `ProgramDiscovery` 等所有扫描器：跳过点号前缀目录
 
 ### 7.4 工具就是 `tools/{id}/` 这一层，**禁止递归扫描**
@@ -180,7 +180,7 @@ tests/QTools.Tests/         22 个测试文件，纯单元 + 内存级集成
 
 ### 7.9 工具页面 CSP 的边界（2026-11 政策调整：允许联网/CDN）
 
-单文件 HTML 的目的在于**导入导出与备份，不是禁网**。`ToolStaticFileMiddleware` 里 `DefaultToolCsp` 对 script/style/img/font/media/frame 放开 `https:`，`connect-src 'self' https: wss:`——工具页面可以引用 CDN、可以 fetch/XHR/WebSocket 外部接口。
+单文件 HTML 的目的在于**导入导出与备份，不是禁网**。`ToolStaticFiles` 里 `DefaultToolCsp` 对 script/style/img/font/media/frame 放开 `https:`，`connect-src 'self' https: wss:`——工具页面可以引用 CDN、可以 fetch/XHR/WebSocket 外部接口。
 
 仍然固定不变：`base-uri 'none'`、`object-src 'none'`、`form-action 'none'`、`frame-ancestors 'self'`，且 **eval 默认禁止**——只有 `manifest.allowEval=true`（需用户显式确认）才切到 `ToolCspAllowEval`。宿主自身页面（host-ui）仍是 `connect-src 'none'`，一切能力走 `window.host`。
 
@@ -398,8 +398,8 @@ QTools 已在运行时经单实例管道转发给主实例；未运行时临时�
 - 运行期切换：`ShellHost.NotifyThemeChanged(theme)` 把 `theme-changed` 广播到工具窗口；
   `tool-theme.js` 收到后调用 `window.host.theme.get()`（`theme.get` 是**非 hostOnly** 的只读方法，任何工具可调）
   更新属性；跟随系统时会监听 `prefers-color-scheme` 同步反色兜底。
-- **桥接脚本只注入一次**：`ToolStaticFileMiddleware` 现在只负责把 HTML 原样写出，桥接 / 窗口控制条 / 主题
-  统一由 `LocalServer.HtmlTransformAsync` 注入——历史上两层都注入导致工具页 bridge.js 执行两次。
+- **桥接脚本只注入一次**：`ToolStaticFiles` 现在只负责读取 HTML 原样返回，桥接 / 窗口控制条 / 主题
+  统一由 `LocalServer.TransformHtml` 注入——历史上两层都注入导致工具页 bridge.js 执行两次。
 
 **原生标题栏**：`Shell/WindowTheme.cs` 用 `DwmSetWindowAttribute(DWMWA_USE_IMMERSIVE_DARK_MODE=20，失败退回 19)`
 让窗口标题栏跟随主题，创建窗口和主题切换时应用；非 Windows 空操作（标题栏跟随系统）。
@@ -418,6 +418,15 @@ Created 回调里设置也仍会沿用系统默认标题栏颜色，用户得让
 刷新统一走上面的 `WM_NCACTIVATE` 方案，不能再引入隐藏/重显或 resize。
 
 回归测试见 `ThemeAndNotifyTests`、`HtmlRewriter.InjectToolTheme` 断言与 `tests/app.test.cjs`（theme.js / tool-theme.js 实时换肤）。
+
+### 7.28 本地 HTTP 服务是自研最小实现，安全边界不能绕过
+
+2026-11 用 `Server/LocalHttpServer.cs` 替换 Kestrel（AOT 单文件 13.99MB → 8.89MB）。
+它只监听回环地址、单请求单连接、只支持 GET / HEAD；限制请求头 16KB、并发 64、I/O 超时 15s，
+Host 头只接受 `127.0.0.1:{port}` / `localhost:{port}`。**路由必须集中在 `LocalServer.RouteAsync`**，
+统一经过 Host 校验、安全响应头与 CSP；任何写操作仍走 WebMessage 桥接，禁止新增 POST 或写端点。
+工具静态文件的七条穿越防护保留在 `ToolStaticFiles`；HTML 注入只在 `LocalServer.TransformHtml` 统一完成。
+新增 HTTP 端点必须同步 `SelfTest`。**不要重新引入 ASP.NET Core/Kestrel**——会失去体积收益并扩大攻击面。
 
 ---
 
@@ -466,7 +475,7 @@ Created 回调里设置也仍会沿用系统默认标题栏颜色，用户得让
 **测试分层**：
 - `dotnet test`：纯单元 + 内存级集成（真实 `BridgeDispatcher.DispatchAsync` + 临时目录）。当前 486 个（含内嵌凭证、索引程序隐藏、拼音首字母/全拼检索、备份/Git、流式取消链路、索引原子覆盖、内容窗口初始定位、在线工具、浮层菜单定位、小工具/在线工具重命名、统一属性字段、托盘菜单规划与弹层定位、主窗口/内容窗口/设置窗口/工具窗口几何记忆、AI 端点识别与双协议流式、使用次数播种、窗口置顶/钉住、桌面快捷方式、列表置顶排序、条目导出包往返/安全边界、主题规范化/HTML 注入/桥接持久化、通知校验与单实例消息、工具页主题标记）。
 - `node --test tests/*.cjs`：前端行为级测试（vm 沙箱 + DOM shim，跑 `app.js`/`bridge.js`/示例工具页面）。当前 154 个（含 theme.js / tool-theme.js 实时换肤、右键版本管理）。注意：vm 沙箱里创建的对象带另一套原型，断言前先用 `JSON.parse(JSON.stringify(...))` 归一化。
-- `--self-test`：真起 Kestrel，27 项 HTTP 断言（host 头校验、路径穿越、工具资源、设置页、品牌图标；其中工具资源每工具 3 项，数量随已装工具数浮动）。
+- `--self-test`：真起本地 HTTP 服务，27 项 HTTP 断言（host 头校验、路径穿越、工具资源、设置页、品牌图标；其中工具资源每工具 3 项，数量随已装工具数浮动）。
 - ad-hoc 验收脚本：**不入库**，历史脚本在 `%TEMP%`。GUI 真机验证可用 WebView2 远程调试：启动时设 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=<port> --remote-debugging-address=127.0.0.1`，再用 CDP（`/json/list` + WebSocket）注入 JS / 截图；日志断言（`-> ok`、`已打开...窗口`）仍是最轻量的手段。
 
 ---

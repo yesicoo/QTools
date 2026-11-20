@@ -4,7 +4,7 @@
 > 用 .NET 10 Native AOT 构建为**单文件自包含可执行程序**（win-x64 实测约 13 MB），无安装器、无运行时依赖，拷走即用。
 
 - **启动器**：小工具、手动添加的程序、自动索引的本机程序混排在同一个细长条列表里，按使用频次排序，支持拼音首字母 / 全拼搜索与真实程序图标；窗口拉宽后自动排成多列网格卡片，`Alt+Space` 全局热键随时呼出 / 隐藏。
-- **小工具宿主**：托管纯静态 HTML/CSS/JS 小工具，本地 Kestrel 服务 + 系统 WebView 打开，通过注入的 `window.host` 垫层向页面提供 **AI / 存储 / 二进制文件 / 硬件捕获**能力——**API Key 只存在于宿主侧，页面永远拿不到**。
+- **小工具宿主**：托管纯静态 HTML/CSS/JS 小工具，本地轻量 HTTP 服务 + 系统 WebView 打开，通过注入的 `window.host` 垫层向页面提供 **AI / 存储 / 二进制文件 / 硬件捕获**能力——**API Key 只存在于宿主侧，页面永远拿不到**。
 - **AI 工具工厂**：用一句自然语言生成完整小工具（流式输出、可取消），可对已有工具「AI 优化更新」，带版本管理与一键回滚；生成内容经静态安全审查，高危项需你显式确认。
 - **备份与恢复**：一键 zip 备份 / 恢复 / 导入，也可推送到你自己的 Git 远程仓库做版本化备份。
 
@@ -136,7 +136,7 @@ AI 接口自动识别 **OpenAI 兼容**与 **Anthropic 兼容**两种端点：De
 dotnet build
 dotnet run --project src/QTools.Host -r win-x64
 
-# 无头自检：起真实 Kestrel 服务，27 项 HTTP 断言，退出码 0 = 全过
+# 无头自检：起真实本地 HTTP 服务，27 项 HTTP 断言，退出码 0 = 全过
 dotnet run --project src/QTools.Host -r win-x64 -- --self-test
 
 dotnet test                      # 486 个单元/集成测试
@@ -146,7 +146,7 @@ node --test tests/*.cjs          # 154 个前端行为级测试（vm 沙箱 + DO
 dotnet publish src/QTools.Host/QTools.Host.csproj -c Release -r win-x64 -o publish/win-x64
 ```
 
-发布产物是**单个 exe**：ASP.NET Core + PhotinoX + 全部前端资源全部内嵌，PhotinoX 原生库首次运行解压到数据目录并经 `DllImportResolver` 加载——「只拷一个 exe 到空目录」即可完整运行。
+发布产物是**单个 exe**：内置轻量 HTTP 服务 + PhotinoX + 全部前端资源全部内嵌，PhotinoX 原生库首次运行解压到数据目录并经 `DllImportResolver` 加载——「只拷一个 exe 到空目录」即可完整运行。
 
 ### 命令行开关
 
@@ -235,7 +235,7 @@ dotnet publish src/QTools.Host/QTools.Host.csproj -c Release -r win-x64 -o publi
 |---|---|---|---|
 | 单元/集成 | `dotnet test` | 412 | manifest 校验、桥接协议（真实 `BridgeDispatcher`）、权限、存储隔离、AI 解析容错、安全审查、备份/Git、索引原子覆盖与去重、流式取消 |
 | 前端行为 | `node --test tests/*.cjs` | 129 | `app.js` / `bridge.js` / 示例工具页面（vm 沙箱 + DOM shim） |
-| HTTP 自检 | `--self-test` | 27 | 真起 Kestrel：Host 校验、路径穿越、工具资源、设置页、品牌图标 |
+| HTTP 自检 | `--self-test` | 27 | 真起本地 HTTP 服务：Host 校验、路径穿越、工具资源、设置页、品牌图标 |
 
 ## 已知 AOT 约束
 
