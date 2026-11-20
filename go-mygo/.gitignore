@@ -1,0 +1,4 @@
+# 构建产物（mygo build 默认输出到 dist）
+/dist/
+/qtools-mygo.exe
+*.syso

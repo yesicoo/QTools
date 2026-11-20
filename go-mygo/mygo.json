@@ -1,0 +1,11 @@
+{
+  "name": "QTools",
+  "slug": "qtools",
+  "identifier": "com.yesicoo.qtools",
+  "version": "1.2.2",
+  "copyright": "Copyright © 2026 QTools",
+  "publisher": "QTools",
+  "icon": "assets/brand/icon.png",
+  "main": ".",
+  "out": "dist"
+}
