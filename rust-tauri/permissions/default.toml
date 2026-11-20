@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-bridge-message"
+description = "允许 QTools 页面通过 Tauri IPC 调用本地桥接分发器（仅回环页面）。"
+commands.allow = ["bridge_message"]

@@ -1,0 +1,10 @@
+{
+  "identifier": "qtools-remote",
+  "description": "允许 QTools 本地页面使用桥接命令（仅 127.0.0.1，工具页面同样经该地址加载）。",
+  "local": true,
+  "remote": {
+    "urls": ["http://127.0.0.1:*", "http://localhost:*"]
+  },
+  "windows": ["*"],
+  "permissions": ["core:default", "allow-bridge-message"]
+}

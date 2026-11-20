@@ -1,0 +1,23 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "QTools",
+  "version": "1.3.0",
+  "identifier": "com.qtools.desktop.rust",
+  "build": {
+    "frontendDist": "ui"
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": [
+      "../src/QTools.Host/Assets/brand/icon.ico",
+      "../src/QTools.Host/Assets/brand/icon.png"
+    ]
+  }
+}

@@ -15,6 +15,13 @@
 最新单文件版本见 [Releases](https://github.com/yesicoo/QTools/releases)：下载 `QTools-<版本>-win-x64.exe`（附 SHA256），双击即可运行。
 发布由推送 `v*` 标签自动触发（`.github/workflows/release.yml`，构建 + 测试 + AOT + 自检通过后才上传），也可在 Actions 页手动触发。
 
+## Rust + Tauri 2 移植版
+
+仓库中的 [`rust-tauri/`](rust-tauri/README.md) 是同一套前端的 Rust 重写实验：用 **Rust + Tauri 2** 替换 .NET/PhotinoX/Kestrel，
+复用 `src/QTools.Host/Assets` 与同一份数据目录，覆盖启动器、工具宿主、AI 工具工厂、主题、托盘、热键、通知、
+导入导出、备份等主要功能。当前**仅 Windows 真机验证**，macOS/Linux 未验证；发布形态暂为 `cargo build --release` 单 exe，
+未接入安装包 CI。详见 [rust-tauri/README.md](rust-tauri/README.md)。
+
 ## 平台支持（如实标注验证状态）
 
 | 平台 | WebView 引擎 | 是否 WebKit | 状态 |
