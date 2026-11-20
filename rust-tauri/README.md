@@ -33,7 +33,7 @@
 | CLI：`--self-test` / `--port` / `--root` / `--open-tool` / `--open-settings` / `--generate-tool` / `--yes` / `--delete-tool` / `--delete-storage` / `--notify` | ✅ |
 | Windows DPAPI 密钥存储（文件名与 .NET 版一致）；AES-GCM 文件兜底 | ✅ Windows |
 | Release 单 exe | ✅ Windows x64 约 7.04 MB（.NET AOT 版 8.89 MB，小约 21%） |
-| 安装包发布 | ⏳ 目前直接运行 `cargo build --release` 产物，未接入 CI 打包 |
+| 安装包发布 | ✅ Release 工作流产出单 exe；NSIS 安装包尚未接入 CI |
 
 ---
 
