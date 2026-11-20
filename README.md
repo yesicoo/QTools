@@ -23,7 +23,7 @@
 **主分支不包含 `rust-tauri/` 目录**，代码、构建方式与最新验证结果见
 [移植版 README](https://github.com/yesicoo/QTools/blob/rust-tauri-port/rust-tauri/README.md)。
 
-| 对比项 | 本分支（.NET） | `rust-tauri-port`（Rust） |
+| 对比项 | `main`（.NET） | `rust-tauri-port`（Rust） |
 |---|---|---|
 | 桌面壳 | .NET 10 Native AOT + PhotinoX | Rust 1.99 + Tauri 2（WebView2） |
 | 本地 HTTP | 自研回环 TCP，仅 GET/HEAD | 同一方案用 Rust 重写，安全边界与 CSP 对齐 |
@@ -37,6 +37,29 @@
 
 > 两个版本的单实例保护各自独立，**不要同时运行**，否则会争用同一份数据目录与本地端口。
 > 移植版的功能边界、CLI、测试基线和已知限制见其分支 README。
+
+## Go + mygo 移植分支
+
+同一套前端与数据目录的 Go 重写版在 [`go-mygo-port`](https://github.com/yesicoo/QTools/tree/go-mygo-port/go-mygo) 分支；
+**主分支不包含 `go-mygo/` 目录**，代码、构建方式与最新验证结果见
+[移植版 README](https://github.com/yesicoo/QTools/blob/go-mygo-port/go-mygo/README.md)。
+
+| 对比项 | `main`（.NET） | `go-mygo-port`（Go） |
+|---|---|---|
+| 桌面壳 | .NET 10 Native AOT + PhotinoX | Go 1.27.4 + mygo（WebView2，纯 Go 无 cgo） |
+| 本地 HTTP | 自研回环 TCP，仅 GET/HEAD | 同一方案用 Go `net/http` 重写，安全边界与 CSP 对齐 |
+| 前端 / 桥接 | `Assets/host-ui` + `window.host` | **复用同一份前端**，用 mygo 绑定服务 + `go-shim.js` 兼容 `window.host` |
+| Release 体积（win-x64 单文件） | **8.89 MB** | **15.5 MB**（14.8 MiB；三实现中最大） |
+| Windows 功能 | 基准实现 | 启动器、工具窗口、AI 工厂、主题、托盘、热键、通知、导入导出、快捷方式、置顶/钉住、备份/Git 均已移植 |
+| 系统托盘 | HTML 圆角条目弹层 | mygo 原生菜单（前 N 项 + 打开 / 设置 / 退出） |
+| 系统通知实现 | 托盘气泡 | mygo Notification（Windows 同为托盘气泡） |
+| 安装包 | GitHub Actions 产出单 exe + SHA256 | 本地 `mygo build` 产出单 exe + NSIS；CI 尚未接入 |
+| 数据目录 | `%APPDATA%\QTools` | 同一目录，可直接共用工具/配置/备份（窗口几何按 DIP 保存，高 DPI 下位置可能不同） |
+| 验证平台 | Windows 真机 | **Windows 真机**；macOS / Linux 未验证 |
+
+> 三种实现的单文件体积：**Rust 7.04 MB < .NET 8.89 MB < Go 15.5 MB**。
+> 三个版本的单实例保护各自独立，**不要同时运行**，否则会争用同一份数据目录与本地端口。
+> Go 版当前没有公开 Release 资产，需按分支 README 本地构建。
 
 ## 平台支持（如实标注验证状态）
 
