@@ -12,7 +12,7 @@ using QTools.Host.Shell;
 namespace QTools.Host;
 
 /// <summary>
-/// 组合根：解析 CLI → 初始化路径/日志 → 自举原生库 → 启动 Kestrel → PhotinoX 消息循环。
+/// 组合根：解析 CLI → 初始化路径/日志 → 自举原生库 → 启动本地 HTTP 服务 → PhotinoX 消息循环。
 /// 错误绝不静默：任何启动失败都会写日志文件 + 标准错误 + 非零退出码。
 /// </summary>
 internal static class Program
