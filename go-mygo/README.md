@@ -8,7 +8,7 @@
 >
 > 本项目所有工作（含本移植分支）均由 DeepSeek 开发完成。
 
-版本：**1.2.2** · 对应 `main` 分支的 .NET 版与 `rust-tauri-port` 分支的 Rust 版。
+版本：**1.3.0** · 对应 `main` 分支的 .NET 版与 `rust-tauri-port` 分支的 Rust 版。
 
 ---
 
@@ -129,7 +129,7 @@ go run github.com/egoist/mygo/cmd/mygo@v0.10.1-0.20261120015749-71f6c08b24a3 bui
 ```text
 dist/windows-amd64/
 ├── QTools.exe                     约 15.5 MB
-└── qtools-setup-1.2.2-amd64.exe   约 4.7 MB（NSIS 安装包）
+└── qtools-setup-1.3.0-amd64.exe   约 4.7 MB（NSIS 安装包）
 ```
 
 运行：

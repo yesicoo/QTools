@@ -12,7 +12,7 @@ import (
 	"github.com/egoist/mygo"
 )
 
-const appVersion = "1.2.2"
+const appVersion = "1.3.0"
 
 type cliOptions struct {
 	port           int
