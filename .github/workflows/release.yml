@@ -1,4 +1,4 @@
-# QTools Release：推送 v* 标签（或手动触发）→ 构建 AOT 单文件 → 创建 GitHub Release 并上传 exe + SHA256
+# QTools Release：推送 v* 标签（或手动触发）→ 同时构建 .NET / Rust / Go 三套单文件并发布到同一个 Release
 name: Release
 
 on:
@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "版本号（不带 v，例如 1.2.0）"
+        description: "版本号（不带 v，例如 1.3.0）"
         required: true
         type: string
 
@@ -17,10 +17,10 @@ permissions:
 jobs:
   release:
     runs-on: windows-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
 
     steps:
-      - name: Checkout
+      - name: Checkout main
         uses: actions/checkout@v4
 
       - name: Resolve version
@@ -35,11 +35,12 @@ jobs:
             $tag = "v" + $env:INPUT_VERSION.Trim().TrimStart('v')
           }
           if ($tag -notmatch '^v\d+\.\d+\.\d+') {
-            throw "版本标签必须形如 v1.2.3（可带 -rc.1 后缀），当前：$tag"
+            throw "版本标签必须形如 v1.3.0（可带 -rc.1 后缀），当前：$tag"
           }
           "tag=$tag" >> $env:GITHUB_OUTPUT
           "version=$($tag.Substring(1))" >> $env:GITHUB_OUTPUT
 
+      # ---------- .NET（main） ----------
       - name: Setup .NET 10
         uses: actions/setup-dotnet@v4
         with:
@@ -50,38 +51,117 @@ jobs:
         with:
           node-version: 22
 
-      - name: Build (Release, 0 warning)
+      - name: .NET build (Release, 0 warning)
         run: dotnet build -c Release
 
-      - name: Unit tests
+      - name: .NET unit tests
         run: dotnet test -c Release --no-build
 
       - name: Frontend tests
         run: node --test tests/app.test.cjs tests/bridge.test.cjs tests/qrcode.test.cjs
 
-      - name: Publish AOT single-file
+      - name: Publish .NET AOT single-file
         run: dotnet publish src/QTools.Host/QTools.Host.csproj -c Release -r win-x64 -o publish/win-x64 -p:Version=${{ steps.version.outputs.version }}
 
-      - name: Self-test (27 HTTP assertions)
+      - name: .NET self-test
         run: ./publish/win-x64/QTools.exe --self-test
 
-      - name: Package release asset
+      # ---------- Rust（rust-tauri-port） ----------
+      - name: Checkout Rust branch
+        uses: actions/checkout@v4
+        with:
+          ref: rust-tauri-port
+          path: rust-src
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust-src/rust-tauri -> target
+
+      - name: Build Rust release
+        run: cargo build --release --manifest-path rust-src/rust-tauri/Cargo.toml
+
+      - name: Rust self-test
+        run: ./rust-src/rust-tauri/target/release/qtools-tauri.exe --root "${{ runner.temp }}\qtools-rust-selftest" --self-test
+
+      # ---------- Go（go-mygo-port） ----------
+      - name: Checkout Go branch
+        uses: actions/checkout@v4
+        with:
+          ref: go-mygo-port
+          path: go-src
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go-src/go-mygo/go.mod
+          cache-dependency-path: go-src/go-mygo/go.sum
+
+      - name: Build Go release (mygo, 单 exe)
+        working-directory: go-src/go-mygo
+        run: go run github.com/egoist/mygo/cmd/mygo@v0.10.1-0.20261120015749-71f6c08b24a3 build -skip-installer
+
+      - name: Go self-test
+        run: ./go-src/go-mygo/dist/windows-amd64/QTools.exe --root "${{ runner.temp }}\qtools-go-selftest" --self-test
+
+      # ---------- 汇总产物 ----------
+      - name: Package release assets
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
-          $asset = "dist/QTools-${{ steps.version.outputs.version }}-win-x64.exe"
-          Copy-Item publish/win-x64/QTools.exe $asset
-          $hash = (Get-FileHash $asset -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$hash  $(Split-Path $asset -Leaf)" | Set-Content "$asset.sha256" -Encoding ascii
+          $version = "${{ steps.version.outputs.version }}"
+          $assets = @(
+            @{ src = "publish/win-x64/QTools.exe"; name = "QTools-$version-win-x64.exe" },
+            @{ src = "rust-src/rust-tauri/target/release/qtools-tauri.exe"; name = "QTools-$version-rust-win-x64.exe" },
+            @{ src = "go-src/go-mygo/dist/windows-amd64/QTools.exe"; name = "QTools-$version-go-win-x64.exe" }
+          )
+          foreach ($item in $assets) {
+            $dest = Join-Path "dist" $item.name
+            Copy-Item $item.src $dest
+            $hash = (Get-FileHash $dest -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($item.name)" | Set-Content "$dest.sha256" -Encoding ascii
+          }
+
+      - name: Write release notes
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          $notes = @"
+          QTools $version 三实现合集（Windows x64 单文件，免安装）
+
+          | 文件 | 实现 | 桌面壳 |
+          |---|---|---|
+          | QTools-$version-win-x64.exe | .NET | .NET 10 Native AOT + PhotinoX |
+          | QTools-$version-rust-win-x64.exe | Rust | Rust + Tauri 2 |
+          | QTools-$version-go-win-x64.exe | Go | Go + mygo |
+
+          三套实现共用同一份前端、桥接协议与数据目录（``%APPDATA%\QTools``），
+          工具、启动项、在线工具、配置与备份可以互通。
+
+          **不要同时运行多个版本**：单实例保护各自独立，同时运行会争用数据目录与本地端口。
+
+          - .NET 版为基准实现，Windows 已真机验证。
+          - Rust / Go 版当前仅 Windows 真机验证，macOS / Linux 未验证。
+          - 每个 exe 均附带同名 `.sha256` 校验文件。
+          "@
+          $notes | Set-Content "dist/release-notes.md" -Encoding utf8
 
       - name: Create GitHub Release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          $version = "${{ steps.version.outputs.version }}"
           gh release create "${{ steps.version.outputs.tag }}" `
-            "dist/QTools-${{ steps.version.outputs.version }}-win-x64.exe" `
-            "dist/QTools-${{ steps.version.outputs.version }}-win-x64.exe.sha256" `
-            --title "QTools ${{ steps.version.outputs.version }}" `
-            --generate-notes `
+            "dist/QTools-$version-win-x64.exe" `
+            "dist/QTools-$version-win-x64.exe.sha256" `
+            "dist/QTools-$version-rust-win-x64.exe" `
+            "dist/QTools-$version-rust-win-x64.exe.sha256" `
+            "dist/QTools-$version-go-win-x64.exe" `
+            "dist/QTools-$version-go-win-x64.exe.sha256" `
+            --title "QTools $version（.NET / Rust / Go）" `
+            --notes-file "dist/release-notes.md" `
             --latest

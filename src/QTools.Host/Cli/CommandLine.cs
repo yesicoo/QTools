@@ -19,7 +19,7 @@ internal sealed record CommandLineOptions(
 internal static class CommandLine
 {
     public const string Usage = """
-        QTools — 个人桌面小工具宿主（.NET 10 Native AOT + PhotinoX + 自研回环 HTTP）
+        QTools — 个人桌面小工具宿主（.NET 10 Native AOT + PhotinoX）
 
         用法：
           QTools [选项]

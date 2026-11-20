@@ -14,8 +14,14 @@
 
 ## 下载
 
-最新单文件版本见 [Releases](https://github.com/yesicoo/QTools/releases)：下载 `QTools-<版本>-win-x64.exe`（附 SHA256），双击即可运行。
-发布由推送 `v*` 标签自动触发（`.github/workflows/release.yml`，构建 + 测试 + AOT + 自检通过后才上传），也可在 Actions 页手动触发。
+最新 Release 同时提供三套 Windows x64 单文件（各附 SHA256）：
+
+- `QTools-<版本>-win-x64.exe`：.NET 10 Native AOT 版（基准实现）
+- `QTools-<版本>-rust-win-x64.exe`：Rust + Tauri 2 版
+- `QTools-<版本>-go-win-x64.exe`：Go + mygo 版
+
+见 [Releases](https://github.com/yesicoo/QTools/releases)，下载后双击即可运行。
+发布由推送 `v*` 标签自动触发（`.github/workflows/release.yml`，三套实现构建、测试、自检通过后才上传），也可在 Actions 页手动触发。
 
 ## Rust + Tauri 2 移植分支
 
