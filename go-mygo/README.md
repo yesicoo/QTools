@@ -33,7 +33,7 @@
 | zip 备份 / 恢复 / 导入；Git 远程推送 / 恢复（先 `ls-remote` 再浅克隆） | ✅ |
 | 命令行：`--self-test` / `--port` / `--root` / `--open-tool` / `--open-settings` / `--generate-tool` / `--yes` / `--delete-tool` / `--delete-storage` / `--notify` / `--dev` / `--version` | ✅ |
 | Windows DPAPI 密钥存储（与 .NET 版同文件：`dpapi.QTools.AI.default.bin`）；AES-GCM 文件兜底 | ✅ Windows |
-| 单 exe 与 NSIS 安装包 | ✅ 本地 `mygo build` 产出 |
+| 单 exe | ✅ Release 工作流产出；NSIS 安装包由本地 `mygo build` 生成 |
 
 ---
 
@@ -52,7 +52,7 @@
 - **系统通知**：使用 `mygo.NewNotification`，Windows 后端为托盘气泡；不依赖 Tauri 通知插件。
 - **窗口几何**：按 mygo 的逻辑坐标（DIP）保存，而 .NET 版 Windows 保存物理像素；
   共用 `%APPDATA%\QTools\data\config.json` 时，非 100% 缩放下位置可能不同。
-- **安装包**：`mygo build` 会同时产出单 exe 与 NSIS 安装包；CI 尚未接入 Go 构建。
+- **安装包**：Release 工作流产出单 exe；本地 `mygo build` 还会产出 NSIS 安装包。
 
 ---
 
@@ -177,7 +177,7 @@ go test ./...
 - 窗口几何按 DIP 保存；与 .NET 版共用配置时，非 100% DPI 下位置可能不一致。
 - 系统通知是否出现取决于 Windows 通知设置 / 勿扰模式；API 调用与错误链路已验证。
 - 没有内置自动更新器；升级仍需替换可执行文件。
-- 尚未接入 GitHub Actions，没有公开的 Go Release 资产；上表体积为本机 `mygo build` 实测。
+- Go 版随主仓库 Release 提供 Windows 单 exe；没有独立 CI，NSIS 安装包仍需本地构建。
 
 ---
 
