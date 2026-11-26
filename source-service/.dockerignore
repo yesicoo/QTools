@@ -1,0 +1,7 @@
+**/bin/
+**/obj/
+data/
+.env
+.git/
+*.log
+*.tmp

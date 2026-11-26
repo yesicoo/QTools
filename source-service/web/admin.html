@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>管理后台 · QTools 工具源</title>
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body class="admin-page">
+  <header class="site-header"><div class="container header-inner"><a class="brand" href="/"><span class="brand-mark">Q</span><span>QTools 工具源管理</span></a><nav class="nav"><a href="/">公开目录</a><button id="logout" class="hidden" type="button">退出登录</button></nav></div></header>
+  <main class="container">
+    <section id="login-card" class="card login-card hidden">
+      <span class="eyebrow">QTools Source</span>
+      <h1>管理员登录</h1>
+      <p class="hint">审核提交、维护工具描述与分类、置顶推荐。</p>
+      <div id="login-error" class="error-box hidden" role="alert"></div>
+      <form id="login-form" class="form-grid"><label>管理员密码<input id="password" type="password" autocomplete="current-password" required></label><button class="primary" id="login-button" type="submit">进入工作台</button></form>
+    </section>
+    <section id="admin-main" class="admin-main hidden">
+      <div class="admin-bar">
+        <div>
+          <span class="eyebrow">QTools Source</span>
+          <h1>审核与目录管理</h1>
+          <p class="admin-bar-hint">审核提交、编辑工具描述与分类、置顶推荐；下载次数会自动累计并参与排行。</p>
+          <div id="session-state" class="notice hidden">正在读取会话…</div>
+        </div>
+        <button id="refresh" type="button">刷新数据</button>
+      </div>
+      <div id="error" class="error-box hidden" role="alert"></div>
+      <div id="stats" class="stats"></div>
+      <div class="tabs" role="tablist"><button id="pending-tab" class="active" type="button" role="tab">待审核</button><button id="tools-tab" type="button" role="tab">已发布工具</button></div>
+      <section id="pending-panel"></section>
+      <section id="tools-panel" class="card panel hidden">
+        <div class="panel-heading">
+          <div><h2>目录工具</h2><p>编辑可修改描述与分类；置顶工具会排在公开目录最前。</p></div>
+          <span id="tools-summary" class="badge">—</span>
+        </div>
+        <div class="table-wrap">
+          <table class="admin-table">
+            <thead><tr><th>工具</th><th>分类</th><th>下载</th><th>版本</th><th>状态</th><th>操作</th></tr></thead>
+            <tbody id="tools-body"></tbody>
+          </table>
+        </div>
+        <datalist id="category-options"></datalist>
+      </section>
+    </section>
+  </main>
+  <script src="/assets/site.js"></script>
+  <script src="/assets/preview-host.js"></script>
+  <script src="/assets/admin.js"></script>
+</body>
+</html>

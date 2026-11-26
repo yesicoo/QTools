@@ -43,6 +43,12 @@
   var embedSequence = 0;
   var updateSequence = 0;
   var createSequence = 0;
+  var sourceState = {
+    query: "", category: "", page: 1, catalog: null, categories: [],
+    detail: null, version: "", availableVersions: [], review: null, detailSequence: 0,
+    loading: false, loadingDetail: false, installing: false, downloading: false,
+    installSequence: 0, downloadSequence: 0, timer: null, config: null
+  };
 
   /* 右键浮层菜单：一次只开一个；菜单 fixed 定位浮在列表上方，不占行内布局 */
   var openMenuState = null;         /* { key, item, li, btn, menuEl, actionsEl, detailEl } */
@@ -106,7 +112,7 @@
   }
 
   /* ================= 视图切换 ================= */
-  var VIEWS = ["tool-view", "content-home", "create-view", "version-view", "import-view", "web-view"];
+  var VIEWS = ["tool-view", "content-home", "create-view", "version-view", "import-view", "web-view", "source-view"];
 
   function showView(name) {
     VIEWS.forEach(function (id) {
@@ -487,6 +493,7 @@
     pin: '<path d="M9 4h6l-1 6 3 3H7l3-3-1-6z"/><path d="M12 13v7"/>',
     history: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 8v4l3 2"/>',
     download: '<path d="M12 3v12m0 0 4-4m-4 4-4-4"/><path d="M4 19h16"/>',
+    upload: '<path d="M12 16V4m0 0-4 4m4-4 4 4"/><path d="M4 20h16"/>',
     back: '<path d="M19 12H5m7-7-7 7 7 7"/>'
   };
 
@@ -644,6 +651,15 @@
       }, "download");
     }
 
+    /* 配置工具源后可直接上传分享（小工具 / 在线工具，需管理员审核） */
+    if ((item.kind === "tool" || item.kind === "web") &&
+        sourceState.config && sourceState.config.baseUrl) {
+      menuAction("上传到工具源", "", function () {
+        closeItemMenu();
+        submitItemToSource(item);
+      }, "upload");
+    }
+
     /* 桌面快捷方式：双击直达独立工具窗口（应用已在托盘时由单实例转发打开） */
     if (item.kind === "tool") {
       menuAction("创建桌面快捷方式", "", function () {
@@ -703,7 +719,7 @@
     var rows = [["名称", item.name], ["类型", kindLabel(item.kind)]];
     if (item.description) { rows.push(["描述", item.description]); }
     rows.push(["ID", item.id]);
-    if (item.kind === "tool" && item.version) { rows.push(["版本", "v" + item.version]); }
+    if ((item.kind === "tool" || item.kind === "web") && item.version) { rows.push(["版本", "v" + item.version]); }
     if (item.category) { rows.push(["类别", item.category]); }
     if (item.target) { rows.push([item.kind === "web" ? "网址" : "目标", item.target]); }
     rows.push(["使用次数", (item.useCount || 0) + " 次"], ["状态", status]);
@@ -783,6 +799,503 @@
       $("web-status").textContent = "";
       toast("保存失败：" + errText(e), true);
     });
+  }
+
+  /* ================= 工具源：目录 / 安装更新 / 提交 ================= */
+  function sourceBytes(bytes) {
+    var value = Number(bytes) || 0;
+    if (value < 1024) { return value + " B"; }
+    if (value < 1024 * 1024) { return (value / 1024).toFixed(1) + " KiB"; }
+    return (value / (1024 * 1024)).toFixed(1) + " MiB";
+  }
+
+  function sourcePermissions(permissions) {
+    var names = { storage: "存储", ai: "AI", media: "媒体", files: "文件" };
+    return (permissions || []).map(function (name) { return names[name] || name; }).join(" / ") || "无额外权限";
+  }
+
+  function sourceEmpty(kind) {
+    var content = kind === "unconfigured"
+      ? { icon: "⌁", title: "还没有配置工具源", text: "填写源地址后即可浏览、直接安装和提交小工具。", action: "settings", label: "打开源地址设置" }
+      : kind === "error"
+        ? { icon: "!", title: "目录读取失败", text: "检查源地址和网络连接后重试。", action: "refresh", label: "重新加载" }
+        : kind === "empty"
+          ? { icon: "◇", title: "工具源还没有公开工具", text: "审核通过的工具会显示在这里。", action: "refresh", label: "刷新目录" }
+          : { icon: "⌕", title: "没有找到匹配的工具", text: "换个关键词或分类试试。", action: "clear", label: "清除筛选" };
+    return '<div class="source-empty"><span class="source-empty-icon">' + esc(content.icon) + "</span>" +
+      "<h3>" + esc(content.title) + "</h3><p>" + esc(content.text) + "</p>" +
+      '<button class="btn ghost sm" type="button" data-source-action="' + content.action + '">' + esc(content.label) + "</button></div>";
+  }
+
+  function sourceLoading() {
+    return new Array(4).fill(
+      '<div class="source-skeleton"><div class="source-skeleton-top"><span></span><i></i></div><b></b><b></b><b class="wide"></b></div>'
+    ).join("");
+  }
+
+  function applySourceEntry(config) {
+    sourceState.config = config || null;
+    var button = $("source-tools");
+    if (button) { button.hidden = !(config && config.baseUrl); }
+  }
+
+  function refreshSourceEntry() {
+    if (!host) { return; }
+    host.callManager("manager.getSourceConfig", {}).then(applySourceEntry, function () {
+      applySourceEntry(null);
+    });
+  }
+
+  /** 连接状态：state 来自实际目录请求（pending/online/offline），缺省时使用配置里的探测结果。 */
+  function renderSourceConnection(config, state) {
+    var text = $("source-connection");
+    if (!text) { return; }
+    if (!config || !config.baseUrl) {
+      text.dataset.state = "empty";
+      text.textContent = "尚未配置源地址";
+      return;
+    }
+    if (state === "pending") {
+      text.dataset.state = "pending";
+      text.textContent = config.baseUrl + " · 正在连接…";
+      return;
+    }
+    var online = state === "online" || (state !== "offline" && !!config.connected);
+    text.dataset.state = online ? "online" : "offline";
+    text.textContent = config.baseUrl + (online
+      ? " · 已连接" + (config.serviceVersion ? " · 服务 v" + config.serviceVersion : "")
+      : " · 连接失败");
+  }
+
+  /** 本地可提交到源站的条目：小工具 + 在线工具（添加网址）。 */
+  function sourceLocalEntries() {
+    var entries = allTools.map(function (tool) {
+      return { kind: "tool", id: tool.id, name: tool.name, version: tool.version };
+    });
+    allItems.forEach(function (item) {
+      if (item.kind === "web") {
+        entries.push({ kind: "web", id: item.id, name: item.name, version: item.version || "1.0.0" });
+      }
+    });
+    return entries.sort(function (a, b) {
+      if (a.kind !== b.kind) { return a.kind === "tool" ? -1 : 1; }
+      return a.name.localeCompare(b.name, "zh-CN");
+    });
+  }
+
+  function localSourceItem(kind, id) {
+    if (kind === "web") {
+      return allItems.filter(function (item) { return item.kind === "web" && item.id === id; })[0] || null;
+    }
+    return allTools.filter(function (tool) { return tool.id === id; })[0] || null;
+  }
+
+  function sourceLocalValue(entry) { return entry.kind + ":" + entry.id; }
+
+  /** 右侧提交卡的选中条目预览：类型、名称、版本 / 网址。 */
+  function updateSourcePickPreview() {
+    var select = $("source-local-tools");
+    var box = $("source-pick-preview");
+    if (!select || !box) { return; }
+    var value = select.value || "";
+    var split = value.indexOf(":");
+    var local = split > 0 ? localSourceItem(value.slice(0, split), value.slice(split + 1)) : null;
+    if (!local) { box.hidden = true; return; }
+    var isWeb = value.slice(0, split) === "web";
+    var kindEl = $("source-pick-kind");
+    kindEl.textContent = isWeb ? "在线工具" : "小工具";
+    kindEl.dataset.kind = isWeb ? "web" : "tool";
+    $("source-pick-name").textContent = local.name;
+    $("source-pick-meta").textContent = "v" + (local.version || "1.0.0") +
+      (isWeb ? (local.target ? " · " + local.target : "") : (local.category ? " · " + local.category : ""));
+    box.hidden = false;
+  }
+
+  function refreshSourceLocalTools() {
+    var select = $("source-local-tools");
+    if (!select) { return; }
+    var selected = select.value;
+    var entries = sourceLocalEntries();
+    var tools = entries.filter(function (entry) { return entry.kind === "tool"; });
+    var webs = entries.filter(function (entry) { return entry.kind === "web"; });
+    function options(list) {
+      return list.map(function (entry) {
+        return '<option value="' + esc(sourceLocalValue(entry)) + '">' + esc(entry.name) +
+          (entry.kind === "web" ? " · 在线" : " · v" + esc(entry.version)) + "</option>";
+      }).join("");
+    }
+    select.innerHTML = entries.length
+      ? (tools.length ? '<optgroup label="小工具">' + options(tools) + "</optgroup>" : "") +
+        (webs.length ? '<optgroup label="在线工具">' + options(webs) + "</optgroup>" : "")
+      : '<option value="">暂无可提交条目</option>';
+    if (entries.some(function (entry) { return sourceLocalValue(entry) === selected; })) { select.value = selected; }
+    $("source-submit-local").disabled = entries.length === 0;
+    var count = $("source-local-count");
+    if (count) { count.textContent = entries.length + " 个"; }
+    updateSourcePickPreview();
+  }
+
+  function updateSourceDetailControls() {
+    var busy = sourceState.loadingDetail || sourceState.installing || sourceState.downloading;
+    $("source-detail-back").disabled = busy;
+    $("source-version").disabled = busy;
+    $("source-detail-preview").disabled = busy;
+    $("source-detail-download").disabled = busy;
+    $("source-detail-install").disabled = busy;
+    $("source-detail-submit").disabled = busy;
+  }
+
+  function resetSourceDetail() {
+    sourceState.detailSequence += 1;
+    sourceState.detail = null;
+    sourceState.version = "";
+    sourceState.availableVersions = [];
+    sourceState.review = null;
+    sourceState.loadingDetail = false;
+    updateSourceDetailControls();
+  }
+
+  function isCurrentSourceRequest(sequence, id, version) {
+    return sourceState.detailSequence === sequence && sourceState.detail &&
+      sourceState.detail.tool.id === id && sourceState.version === version;
+  }
+
+  function showSourceView() {
+    if (!host) { toast("桥接不可用", true); return; }
+    resetSourceDetail();
+    $("source-detail").hidden = true;
+    $("source-catalog").hidden = false;
+    $("source-grid").hidden = false;
+    $("source-submit-status").textContent = "";
+    showView("source-view");
+    function start() {
+      refreshSourceLocalTools();
+      host.callManager("manager.getSourceConfig", {}).then(function (config) {
+        applySourceEntry(config);
+        var configured = !!(config && config.baseUrl);
+        renderSourceConnection(config, configured ? "pending" : undefined);
+        $("source-toolbar").hidden = !configured;
+        $("source-results-meta").hidden = !configured;
+        if (configured) { loadSourceCatalog(); }
+        else {
+          $("source-grid").innerHTML = sourceEmpty("unconfigured");
+          $("source-page").textContent = "尚未配置源地址";
+          $("source-pagination").hidden = true;
+        }
+      }, function (error) { toast("读取工具源配置失败：" + errText(error), true); });
+      refreshTools().then(refreshSourceLocalTools, refreshSourceLocalTools);
+    }
+    start();
+    /* 内容窗口首次进入时还没有统一列表（在线工具、已安装徽标依赖它） */
+    if (isContentMode) {
+      refreshLauncher().then(function () {
+        refreshSourceLocalTools();
+        if (sourceState.catalog) { renderSourceCatalog(sourceState.catalog); }
+      }, function () { });
+    }
+  }
+
+  function loadSourceCatalog() {
+    if (!host || sourceState.loading) { return Promise.resolve(); }
+    sourceState.loading = true;
+    $("source-refresh").disabled = true;
+    $("source-grid").innerHTML = sourceLoading();
+    $("source-page").textContent = "正在读取工具源…";
+    $("source-pagination").hidden = true;
+    renderSourceConnection(sourceState.config, "pending");
+    return host.callManager("manager.sourceCatalog", {
+      q: sourceState.query,
+      category: sourceState.category,
+      page: sourceState.page,
+      pageSize: 24
+    }).then(function (catalog) {
+      sourceState.catalog = catalog;
+      sourceState.categories = catalog.categories || [];
+      renderSourceCatalog(catalog);
+      renderSourceConnection(sourceState.config, "online");
+    }, function (error) {
+      $("source-grid").innerHTML = sourceEmpty("error");
+      $("source-page").textContent = "读取失败";
+      renderSourceConnection(sourceState.config, "offline");
+      toast("读取工具源失败：" + errText(error), true);
+    }).finally(function () {
+      sourceState.loading = false;
+      $("source-refresh").disabled = false;
+    });
+  }
+
+  function renderSourceCatalog(catalog) {
+    var category = $("source-category");
+    var selected = sourceState.category;
+    category.innerHTML = '<option value="">全部分类</option>' + (catalog.categories || []).map(function (name) {
+      return '<option value="' + esc(name) + '">' + esc(name) + "</option>";
+    }).join("");
+    category.value = selected;
+    var grid = $("source-grid");
+    grid.innerHTML = "";
+    if (!catalog.items || !catalog.items.length) {
+      grid.innerHTML = sourceEmpty(sourceState.query || sourceState.category ? "no-match" : "empty");
+    } else {
+      catalog.items.forEach(function (tool) {
+        var isWeb = tool.kind === "web";
+        var installed = localSourceItem(tool.kind || "tool", tool.id);
+        var card = document.createElement("article");
+        card.className = "source-card";
+        card.innerHTML = '<div class="source-card-top"><div class="source-card-icon">' + esc(tool.glyph || firstGlyph(tool.name)) + '</div><div class="source-card-title"><div class="source-card-tags"><span class="badge">' + esc(tool.category || "未分类") + '</span><span class="badge ver">v' + esc(tool.version) + '</span>' +
+          (isWeb ? '<span class="badge web">在线工具</span>' : "") +
+          (installed ? '<span class="badge source-installed">已安装' + (installed.version ? " v" + esc(installed.version) : "") + "</span>" : "") + '</div><h3>' + esc(tool.name) + "</h3></div></div>" +
+          '<p class="source-card-desc">' + esc(tool.description || "暂无描述") + "</p>" +
+          '<div class="source-card-meta"><span>' + esc(isWeb ? "网址直达" : sourceBytes(tool.sizeBytes)) + "</span><span>" + esc(sourcePermissions(tool.permissions)) + "</span></div>" +
+          '<div class="source-card-actions"><button class="btn primary sm" type="button" data-source-action="detail" data-source-id="' + esc(tool.id) + '">查看 / 安装</button><button class="btn ghost sm" type="button" data-source-action="preview" data-source-id="' + esc(tool.id) + '" data-source-version="' + esc(tool.version) + '">' + (isWeb ? "在线打开" : "沙箱预览") + "</button></div>";
+        grid.appendChild(card);
+      });
+    }
+    var pages = Math.max(1, Math.ceil(catalog.total / catalog.pageSize));
+    $("source-page").textContent = "第 " + catalog.page + " / " + pages + " 页 · 共 " + catalog.total + " 个工具";
+    $("source-prev").disabled = catalog.page <= 1;
+    $("source-next").disabled = catalog.page >= pages;
+    $("source-pagination").hidden = pages <= 1;
+  }
+
+  function sourceAction(target) {
+    var node = target;
+    while (node && node !== document) {
+      if (node.dataset && node.dataset.sourceAction) { return node; }
+      node = node.parentNode;
+    }
+    return null;
+  }
+
+  function previewSourceTool(id, version) {
+    if (!host || sourceState.installing || sourceState.downloading || sourceState.loadingDetail) { return; }
+    host.callManager("manager.sourcePreview", { id: id, version: version || "" }).then(function () {
+      toast("已在隔离预览窗口打开");
+    }, function (error) { toast("预览失败：" + errText(error), true); });
+  }
+
+  function showSourceDetail(tool) {
+    if (!host || sourceState.installing || sourceState.downloading || sourceState.loadingDetail) { return; }
+    var sequence = ++sourceState.detailSequence;
+    sourceState.detail = null;
+    sourceState.review = null;
+    sourceState.loadingDetail = true;
+    updateSourceDetailControls();
+    $("source-detail-status").textContent = "读取详情…";
+    host.callManager("manager.sourceTool", { id: tool.id, version: tool.version || "" }).then(function (detail) {
+      if (sourceState.detailSequence !== sequence) { return; }
+      sourceState.detail = detail;
+      sourceState.version = tool.version || detail.tool.version;
+      sourceState.availableVersions = detail.tool.versions && detail.tool.versions.length ? detail.tool.versions.slice() : [detail.tool.version];
+      sourceState.loadingDetail = false;
+      renderSourceDetail(detail);
+    }, function (error) {
+      if (sourceState.detailSequence !== sequence) { return; }
+      sourceState.loadingDetail = false;
+      updateSourceDetailControls();
+      $("source-detail-status").textContent = "";
+      toast("读取工具详情失败：" + errText(error), true);
+    });
+  }
+
+  function renderSourceDetail(detail) {
+    var tool = detail.tool;
+    var isWeb = tool.kind === "web";
+    var versions = sourceState.availableVersions.length ? sourceState.availableVersions.slice() : [tool.version];
+    if (versions.indexOf(sourceState.version) < 0) { versions = [sourceState.version]; }
+    $("source-detail-glyph").textContent = tool.glyph || firstGlyph(tool.name);
+    $("source-detail-title").textContent = tool.name;
+    $("source-detail-description").textContent = tool.description || "暂无描述";
+    $("source-detail-version-badge").textContent = "v" + sourceState.version;
+    var rows = [
+      [isWeb ? "在线工具 ID" : "工具 ID", tool.id], ["版本", sourceState.version], ["分类", tool.category || "未分类"],
+      ["权限", sourcePermissions(tool.permissions)]
+    ];
+    if (isWeb && tool.url) { rows.push(["网址", tool.url]); }
+    rows.push(["安装包", sourceBytes(tool.sizeBytes)], ["SHA256", tool.sha256]);
+    $("source-detail-meta").innerHTML = rows.map(function (row) {
+      var cls = row[0] === "SHA256" ? ' class="mono"' : "";
+      return "<div><dt>" + esc(row[0]) + "</dt><dd" + cls + ">" + esc(row[1]) + "</dd></div>";
+    }).join("");
+    $("source-version").innerHTML = versions.map(function (version) {
+      return '<option value="' + esc(version) + '">v' + esc(version) + "</option>";
+    }).join("");
+    $("source-version").value = sourceState.version;
+    $("source-review").hidden = true;
+    $("source-accept").checked = false;
+    $("source-detail-preview").textContent = isWeb ? "在线打开" : "沙箱预览";
+    $("source-detail-install").textContent = isWeb ? "保存到我的在线工具" : "直接安装 / 更新";
+    $("source-detail-status").textContent = "";
+    $("source-detail-submit").hidden = !localSourceItem(tool.kind || "tool", tool.id);
+    $("source-grid").hidden = true;
+    $("source-catalog").hidden = true;
+    $("source-detail").hidden = false;
+    updateSourceDetailControls();
+  }
+
+  function changeSourceVersion() {
+    if (!sourceState.detail || !host || sourceState.loadingDetail || sourceState.installing || sourceState.downloading) { return; }
+    var sequence = ++sourceState.detailSequence;
+    var id = sourceState.detail.tool.id;
+    var version = $("source-version").value;
+    sourceState.review = null;
+    sourceState.loadingDetail = true;
+    updateSourceDetailControls();
+    $("source-detail-status").textContent = "读取版本…";
+    host.callManager("manager.sourceTool", { id: id, version: version }).then(function (detail) {
+      if (sourceState.detailSequence !== sequence || !sourceState.detail || sourceState.detail.tool.id !== id) { return; }
+      sourceState.detail = detail;
+      sourceState.version = version;
+      sourceState.loadingDetail = false;
+      renderSourceDetail(detail);
+    }, function (error) {
+      if (sourceState.detailSequence !== sequence || !sourceState.detail || sourceState.detail.tool.id !== id) { return; }
+      sourceState.loadingDetail = false;
+      $("source-version").value = sourceState.version;
+      updateSourceDetailControls();
+      $("source-detail-status").textContent = "";
+      toast("读取版本失败：" + errText(error), true);
+    });
+  }
+
+  function renderSourceReview(result, id, version) {
+    renderFindingsInto($("source-findings"), result.findings);
+    var assets = $("source-external-assets");
+    assets.hidden = !result.externalAssets || !result.externalAssets.length;
+    assets.textContent = result.externalAssets && result.externalAssets.length
+      ? "引用了工具目录外的相对资源：" + result.externalAssets.join("、") : "";
+    sourceState.review = { id: id, version: version, sha256: result.packageSha256 || "" };
+    $("source-accept").checked = false;
+    $("source-review").hidden = false;
+    $("source-detail-install").textContent = "确认风险并安装";
+    $("source-detail-status").textContent = "检测到高危项，请审查后勾选确认。";
+  }
+
+  function installSourceDetail() {
+    if (!host || !sourceState.detail || sourceState.loadingDetail || sourceState.installing || sourceState.downloading) { return; }
+    var sequence = sourceState.detailSequence;
+    var detail = sourceState.detail;
+    var id = detail.tool.id;
+    var version = sourceState.version;
+    var review = sourceState.review;
+    if (review && review.sha256 !== (detail.tool.sha256 || "")) {
+      sourceState.review = null;
+      $("source-accept").checked = false;
+      $("source-review").hidden = true;
+    }
+    var accepted = !!(sourceState.review && sourceState.review.id === id &&
+      sourceState.review.version === version && sourceState.review.sha256 === detail.tool.sha256 &&
+      $("source-accept").checked);
+    if (!$("source-review").hidden && !accepted) {
+      toast("请先勾选已审查风险", true);
+      return;
+    }
+    var installSequence = ++sourceState.installSequence;
+    sourceState.installing = true;
+    updateSourceDetailControls();
+    $("source-detail-status").textContent = "下载、校验并执行本地安全审查…";
+    host.callManager("manager.sourceInstall", {
+      id: id,
+      version: version,
+      acceptHighSeverity: accepted,
+      reviewedSha256: accepted ? sourceState.review.sha256 : ""
+    }).then(function (result) {
+      if (!isCurrentSourceRequest(sequence, id, version)) { return; }
+      if (result.requiresExplicitAcceptance) {
+        renderSourceReview(result, id, version);
+        return;
+      }
+      var isWeb = detail.tool.kind === "web";
+      if (result.action === "unchanged") {
+        toast("本地已是相同或更高版本，未覆盖");
+        $("source-detail-status").textContent = "本地版本无需更新";
+      } else {
+        toast((result.action === "updated" ? "已更新 " : (isWeb ? "已添加在线工具 " : "已安装 ")) +
+          result.toolName + " v" + result.version);
+        $("source-detail-status").textContent = isWeb
+          ? "已保存到在线工具列表，可从主窗口直接打开"
+          : result.action === "updated" ? "更新完成，用户数据与历史版本已保留" : "安装完成";
+      }
+      var refreshed = refreshTools();
+      if (isWeb) { refreshed = refreshed.then(refreshLauncher); }
+      refreshed.then(function () {
+        if (!isCurrentSourceRequest(sequence, id, version)) { return; }
+        refreshSourceLocalTools();
+        $("source-detail-submit").hidden = !localSourceItem(detail.tool.kind || "tool", result.toolId);
+      }, function () { });
+      loadSourceCatalog();
+    }, function (error) {
+      if (!isCurrentSourceRequest(sequence, id, version)) { return; }
+      $("source-detail-status").textContent = "";
+      toast("安装失败：" + errText(error), true);
+    }).finally(function () {
+      if (sourceState.installSequence !== installSequence) { return; }
+      sourceState.installing = false;
+      updateSourceDetailControls();
+    });
+  }
+
+  function downloadSourceDetail() {
+    if (!host || !sourceState.detail || sourceState.loadingDetail || sourceState.installing || sourceState.downloading) { return; }
+    var sequence = sourceState.detailSequence;
+    var detail = sourceState.detail;
+    var id = detail.tool.id;
+    var version = sourceState.version;
+    var downloadSequence = ++sourceState.downloadSequence;
+    sourceState.downloading = true;
+    updateSourceDetailControls();
+    $("source-detail-status").textContent = "正在准备下载，请在保存对话框中选择位置…";
+    host.callManager("manager.sourceDownload", {
+      id: id,
+      version: version
+    }).then(function (result) {
+      if (!isCurrentSourceRequest(sequence, id, version)) { return; }
+      if (result.path) {
+        toast("已保存安装包：" + (result.fileName || result.path));
+        $("source-detail-status").textContent = "安装包已保存，可离线分享或日后导入";
+      } else {
+        $("source-detail-status").textContent = "已取消保存";
+      }
+    }, function (error) {
+      if (!isCurrentSourceRequest(sequence, id, version)) { return; }
+      $("source-detail-status").textContent = "";
+      toast("下载失败：" + errText(error), true);
+    }).finally(function () {
+      if (sourceState.downloadSequence !== downloadSequence) { return; }
+      sourceState.downloading = false;
+      updateSourceDetailControls();
+    });
+  }
+
+  function submitSourceLocal(kind, id) {
+    if (!host || !id) { return; }
+    var button = $("source-submit-local");
+    var status = $("source-submit-status");
+    button.disabled = true;
+    status.className = "source-side-status";
+    status.textContent = kind === "web" ? "正在导出在线工具并上传…" : "正在导出并上传…";
+    host.callManager("manager.sourceSubmit", { kind: kind, id: id }).then(function (result) {
+      status.className = "source-side-status ok";
+      status.textContent = "已提交 " + (result.toolName || id) + " · 审核编号 " + result.id;
+      toast("已提交工具源审核");
+    }, function (error) {
+      status.className = "source-side-status error";
+      status.textContent = "提交失败：" + errText(error);
+      toast("提交失败：" + errText(error), true);
+    }).finally(function () { button.disabled = !$("source-local-tools").value; });
+  }
+
+  /** 右键「上传到工具源」：确认后直接提交当前运行版本。 */
+  function submitItemToSource(item) {
+    if (!host) { return; }
+    var kind = item.kind === "web" ? "web" : "tool";
+    var version = item.version || "1.0.0";
+    var what = kind === "web" ? "在线工具" : "小工具";
+    if (!confirm("把" + what + "「" + item.name + "」v" + version + " 上传到工具源？\n提交后需管理员审核通过才会公开。")) { return; }
+    toast("正在提交到工具源…");
+    host.callManager("manager.sourceSubmit", { kind: kind, id: item.id }).then(function (result) {
+      toast("已提交审核，编号 " + (result.id || "—"));
+      if ($("source-view") && !$("source-view").hidden) { loadSourceCatalog(); }
+    }, function (e) { toast("提交失败：" + errText(e), true); });
   }
 
   /* ================= 版本管理 ================= */
@@ -1456,6 +1969,99 @@
     }, function (e) { toast("打开失败：" + errText(e), true); });
   });
 
+  on("source-tools", "click", function () {
+    if (isContentMode) { showSourceView(); }
+    else { openContentPanel("source"); }
+  });
+  on("source-settings", "click", function () {
+    host.callManager("manager.openSettings", {}).catch(function (error) { toast("打开设置失败：" + errText(error), true); });
+  });
+  on("source-close", "click", function () {
+    if (isContentMode) { closeContent(); }
+    else { showView("content-home"); }
+  });
+  on("source-refresh", "click", loadSourceCatalog);
+  on("source-search", "input", function () {
+    clearTimeout(sourceState.timer);
+    sourceState.timer = setTimeout(function () {
+      sourceState.query = $("source-search").value.trim();
+      sourceState.page = 1;
+      loadSourceCatalog();
+    }, 250);
+  });
+  on("source-category", "change", function () {
+    sourceState.category = this.value;
+    sourceState.page = 1;
+    loadSourceCatalog();
+  });
+  on("source-prev", "click", function () {
+    if (sourceState.page > 1) { sourceState.page -= 1; loadSourceCatalog(); }
+  });
+  on("source-next", "click", function () {
+    var catalog = sourceState.catalog;
+    if (catalog && sourceState.page < Math.ceil(catalog.total / catalog.pageSize)) {
+      sourceState.page += 1;
+      loadSourceCatalog();
+    }
+  });
+  on("source-grid", "click", function (event) {
+    var action = sourceAction(event.target);
+    if (!action) { return; }
+    var kind = action.dataset.sourceAction;
+    if (kind === "settings") {
+      host.callManager("manager.openSettings", {}).catch(function (error) { toast("打开设置失败：" + errText(error), true); });
+      return;
+    }
+    if (kind === "refresh") { loadSourceCatalog(); return; }
+    if (kind === "clear") {
+      sourceState.query = "";
+      sourceState.category = "";
+      sourceState.page = 1;
+      $("source-search").value = "";
+      $("source-category").value = "";
+      loadSourceCatalog();
+      return;
+    }
+    var id = action.dataset.sourceId;
+    if (kind === "preview") { previewSourceTool(id, action.dataset.sourceVersion); }
+    else {
+      var tool = (sourceState.catalog && sourceState.catalog.items || []).filter(function (item) { return item.id === id; })[0];
+      if (tool) { showSourceDetail(tool); }
+    }
+  });
+  on("source-detail-back", "click", function () {
+    if (sourceState.loadingDetail || sourceState.installing || sourceState.downloading) { return; }
+    resetSourceDetail();
+    $("source-review").hidden = true;
+    $("source-accept").checked = false;
+    $("source-detail").hidden = true;
+    $("source-catalog").hidden = false;
+    $("source-grid").hidden = false;
+  });
+  on("source-version", "change", changeSourceVersion);
+  on("source-detail-preview", "click", function () {
+    if (sourceState.detail && !sourceState.loadingDetail && !sourceState.installing && !sourceState.downloading) {
+      previewSourceTool(sourceState.detail.tool.id, sourceState.version);
+    }
+  });
+  on("source-detail-install", "click", installSourceDetail);
+  on("source-detail-download", "click", downloadSourceDetail);
+  on("source-detail-submit", "click", function () {
+    if (sourceState.detail && !sourceState.loadingDetail && !sourceState.installing && !sourceState.downloading) {
+      submitSourceLocal(sourceState.detail.tool.kind || "tool", sourceState.detail.tool.id);
+    }
+  });
+  on("source-submit-local", "click", function () {
+    var value = $("source-local-tools").value || "";
+    var split = value.indexOf(":");
+    if (split <= 0) { return; }
+    submitSourceLocal(value.slice(0, split), value.slice(split + 1));
+  });
+  on("source-local-tools", "change", function () {
+    $("source-submit-local").disabled = !this.value;
+    updateSourcePickPreview();
+  });
+
   on("create-tool", "click", function () {
     if (isContentMode) { showCreateView(); }
     else { openContentPanel("create"); }
@@ -1499,10 +2105,12 @@
 
   /* 回到主窗口时刷新：内容窗口里创建/导入/删除工具、启动程序后保持最新排序 */
   window.addEventListener("focus", function () {
+    refreshSourceEntry();
     if (!isContentMode && host) { refreshLauncher(); }
   });
 
   if (host) {
+    refreshSourceEntry();
     if (isContentMode) {
       loadContentWindowState();
       refreshTools().then(function () {
@@ -1521,6 +2129,8 @@
           showImportView();
         } else if (view === "web") {
           showWebView();
+        } else if (view === "source") {
+          showSourceView();
         } else {
           showView("content-home");
         }

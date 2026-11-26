@@ -80,6 +80,21 @@ public sealed class ItemPackageTests : IDisposable
         }
     }
 
+    private static void ForgeEntryLength(string sourcePath, string targetPath, string name, int length)
+    {
+        var package = File.ReadAllBytes(sourcePath);
+        for (var i = 0; i + 46 <= package.Length; i++)
+        {
+            if (package[i] != 0x50 || package[i + 1] != 0x4b || package[i + 2] != 0x01 || package[i + 3] != 0x02) { continue; }
+            var nameLength = BitConverter.ToUInt16(package, i + 28);
+            if (System.Text.Encoding.UTF8.GetString(package, i + 46, nameLength) != name) { continue; }
+            BitConverter.GetBytes((uint)length).CopyTo(package, i + 24);
+            File.WriteAllBytes(targetPath, package);
+            return;
+        }
+        throw new InvalidOperationException("测试 ZIP 条目不存在");
+    }
+
     private static void WriteApp(string root, string id, string name)
     {
         var directory = Path.Combine(root, "apps", id);
@@ -185,6 +200,25 @@ public sealed class ItemPackageTests : IDisposable
         Assert.True(File.Exists(Path.Combine(loaded.Directory, "files", "data.bin")));
         // 导出包不含源端 .versions 历史；导入后只可能有本机自动生成的首个版本快照
         Assert.False(File.Exists(Path.Combine(loaded.Directory, ".versions", "0.9.0", "index.html")));
+    }
+
+    [Fact]
+    public async Task ImportRejectsEntryWhoseActualLengthDiffersFromDirectory()
+    {
+        WriteTool(_sourceRoot, "calc", "计算器", "1.0.0", "<h1> Longer content </h1>");
+        var source = CreateService(_sourceRoot);
+        var package = Path.Combine(_exportDir, "calc.qtools");
+        source.Export("tool", "calc", package);
+        var forgedPath = Path.Combine(_exportDir, "forged.qtools");
+        ForgeEntryLength(package, forgedPath, "tools/calc/index.html", 1);
+
+        var dest = CreateService(_destRoot);
+        var error = await Assert.ThrowsAsync<QTools.Host.Bridge.BridgeException>(
+            () => dest.ImportPackageAsync(forgedPath, false, CancellationToken.None));
+
+        Assert.Equal("IMPORT_PACKAGE_INVALID", error.Code);
+        Assert.Contains("实际解压长度", error.Message);
+        Assert.False(new ToolRegistry(Path.Combine(_destRoot, "tools")).Contains("calc"));
     }
 
     [Fact]

@@ -141,7 +141,7 @@ public static class LauncherListBuilder
                     web.Id,
                     KindWeb,
                     web.Name,
-                    null,
+                    web.Entry.Version,
                     null,
                     Text.PinyinInitials.BuildSearchKey(
                         web.Name, web.Id, web.Entry.Category, web.Entry.Url, web.Entry.Description),

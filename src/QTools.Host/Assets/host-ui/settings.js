@@ -512,6 +512,57 @@
   on("git-push", "click", function () { runGit("manager.gitPush"); });
   on("git-restore", "click", function () { runGit("manager.gitRestore"); });
 
+  /* ================= 工具源 ================= */
+  function renderSourceConfig(config) {
+    $("source-baseurl").value = (config && config.baseUrl) || "";
+    var status = $("source-config-status");
+    if (!config || !config.baseUrl) {
+      status.textContent = "未配置";
+      status.className = "badge none";
+    } else if (config.connected) {
+      status.textContent = "已连接" + (config.serviceVersion ? " · v" + config.serviceVersion : "");
+      status.className = "badge";
+    } else {
+      status.textContent = "已配置";
+      status.className = "badge none";
+    }
+  }
+
+  function loadSourceConfig() {
+    if (!host) { return; }
+    return host.callManager("manager.getSourceConfig", {}).then(renderSourceConfig, function (error) {
+      toast("读取工具源配置失败：" + errText(error), true);
+    });
+  }
+
+  function saveSourceConfig(testConnection) {
+    if (!host) { return; }
+    var save = $("source-save");
+    var test = $("source-test");
+    save.disabled = true;
+    test.disabled = true;
+    host.callManager("manager.setSourceConfig", { baseUrl: $("source-baseurl").value.trim() }).then(function (config) {
+      renderSourceConfig(config);
+      if (!testConnection) { toast("工具源地址已保存"); return null; }
+      return host.callManager("manager.testSource", {});
+    }).then(function (config) {
+      if (config) { renderSourceConfig(config); toast("工具源连接成功"); }
+    }, function (error) {
+      toast("工具源配置失败：" + errText(error), true);
+    }).finally(function () {
+      save.disabled = false;
+      test.disabled = false;
+    });
+  }
+
+  on("source-save", "click", function () { saveSourceConfig(false); });
+  on("source-test", "click", function () { saveSourceConfig(true); });
+  on("source-open", "click", function () {
+    host.callManager("manager.openContent", { view: "source" }).catch(function (error) {
+      toast("打开工具源失败：" + errText(error), true);
+    });
+  });
+
   /* ================= 事件绑定 ================= */
   on("ai-save", "click", function () { saveAiConfig(false); });
   on("ai-clear", "click", function () {
@@ -522,6 +573,7 @@
   if (host) {
     refreshServerInfo();
     loadAiConfig();
+    loadSourceConfig();
     loadTheme();
     loadBackups();
     loadBackupConfig();

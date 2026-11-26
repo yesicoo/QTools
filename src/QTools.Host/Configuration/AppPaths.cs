@@ -73,6 +73,12 @@ public static class AppPaths
     /// <summary>导出包导入的临时解压目录（校验通过后才整体移入 tools/，失败不留半成品）。</summary>
     public static string ImportStagingDirectory => Path.Combine(DataDirectory, "import-staging");
 
+    /// <summary>工具源下载包的临时目录。</summary>
+    public static string SourceCacheDirectory => Path.Combine(DataDirectory, "source-cache");
+
+    /// <summary>工具源更新前的完整回滚副本（不进入静态服务）。</summary>
+    public static string SourceRollbackDirectory => Path.Combine(DataDirectory, "source-rollback");
+
     /// <summary>索引程序图标缓存（绝不能放进 apps/，否则会被当成手动启动项扫进注册表）。</summary>
     public static string IconCacheDirectory => Path.Combine(DataDirectory, "icon-cache");
 
@@ -155,6 +161,8 @@ public static class AppPaths
         Directory.CreateDirectory(LogsDirectory);
         Directory.CreateDirectory(WebViewDataDirectory);
         Directory.CreateDirectory(IconCacheDirectory);
+        Directory.CreateDirectory(SourceCacheDirectory);
+        Directory.CreateDirectory(SourceRollbackDirectory);
     }
 
     /// <summary>

@@ -90,6 +90,9 @@ internal sealed class LocalServer : IDisposable
     /// <summary>单条目导出/导入包（小工具当前运行版本 / 启动项 / 在线工具）。</summary>
     public Backup.ItemPackageService ItemPackages { get; }
 
+    /// <summary>工具源目录、安装更新与提交服务。</summary>
+    public Source.ToolSourceService Source { get; }
+
     /// <summary>宿主配置。</summary>
     public Configuration.AppConfig Config { get; }
 
@@ -134,11 +137,17 @@ internal sealed class LocalServer : IDisposable
             Tools, Importer, Apps, AppStore, WebTools, WebToolStore,
             QTools.Host.Configuration.AppPaths.RootDirectory,
             QTools.Host.Configuration.AppPaths.ImportStagingDirectory);
+        Source = new Source.ToolSourceService(
+            Tools, WebTools, WebToolStore, ItemPackages, Usage,
+            QTools.Host.Configuration.AppPaths.ConfigFilePath,
+            QTools.Host.Configuration.AppPaths.ToolsDirectory,
+            QTools.Host.Configuration.AppPaths.SourceCacheDirectory,
+            QTools.Host.Configuration.AppPaths.SourceRollbackDirectory);
 
         Dispatcher = new BridgeDispatcher(
             Tools, Storage, Ai, Secrets, Creator, Importer, Apps, Launcher, AppStore, Discovery,
             Backup, GitBackup, ProgramIndex, Usage, WebTools, WebToolStore, HiddenPrograms, PinnedItems,
-            ItemPackages);
+            ItemPackages, Source);
     }
 
     public int Port => _http?.Port ?? 0;

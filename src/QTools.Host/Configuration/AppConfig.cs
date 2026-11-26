@@ -11,7 +11,8 @@ public sealed record AppConfig(
     ServerConfigSection Server,
     StorageConfigSection Storage,
     BackupConfigSection? Backup = null,
-    ShellConfigSection? Shell = null)
+    ShellConfigSection? Shell = null,
+    SourceConfigSection? Source = null)
 {
     public static AppConfig Default { get; } = new(
         new AiConfigSection(
@@ -30,7 +31,8 @@ public sealed record AppConfig(
             LastPushUtc: null,
             LastPushStatus: null),
         new ShellConfigSection(
-            HotkeyEnabled: true));
+            HotkeyEnabled: true),
+        new SourceConfigSection(BaseUrl: null));
 }
 
 public sealed record AiConfigSection(
@@ -48,6 +50,9 @@ public sealed record BackupConfigSection(
     string? GitRemoteUrl,
     string? LastPushUtc,
     string? LastPushStatus);
+
+/// <summary>工具源配置：仅保存服务地址，不保存任何提交凭证或 API Key。</summary>
+public sealed record SourceConfigSection(string? BaseUrl);
 
 /// <summary>
 /// 壳配置：全局热键（Alt+Space 呼出/隐藏主窗口，仅 Windows）、主窗口上次的位置（Windows 物理像素，

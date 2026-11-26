@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>QTools.Source</AssemblyName>
+    <RootNamespace>QTools.Source</RootNamespace>
+    <PublishAot>true</PublishAot>
+    <PublishTrimmed>true</PublishTrimmed>
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <DebugType Condition="'$(Configuration)' == 'Release'">none</DebugType>
+    <OptimizationPreference Condition="'$(Configuration)' == 'Release'">Size</OptimizationPreference>
+    <IlcFoldIdenticalMethodBodies Condition="'$(Configuration)' == 'Release'">true</IlcFoldIdenticalMethodBodies>
+    <UseSystemResourceKeys Condition="'$(Configuration)' == 'Release'">true</UseSystemResourceKeys>
+    <HttpActivityPropagationSupport Condition="'$(Configuration)' == 'Release'">false</HttpActivityPropagationSupport>
+    <MetricsSupport Condition="'$(Configuration)' == 'Release'">false</MetricsSupport>
+    <DebuggerSupport Condition="'$(Configuration)' == 'Release'">false</DebuggerSupport>
+    <StackTraceSupport Condition="'$(Configuration)' == 'Release'">false</StackTraceSupport>
+    <IlcGenerateStackTraceData Condition="'$(Configuration)' == 'Release'">false</IlcGenerateStackTraceData>
+    <NullabilityInfoContextSupport Condition="'$(Configuration)' == 'Release'">false</NullabilityInfoContextSupport>
+    <EventSourceSupport Condition="'$(Configuration)' == 'Release'">false</EventSourceSupport>
+    <EnableUnsafeUTF7Encoding Condition="'$(Configuration)' == 'Release'">false</EnableUnsafeUTF7Encoding>
+    <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="web\**" LogicalName="Web/%(RecursiveDir)%(Filename)%(Extension)" />
+    <None Update="source-config.example.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <Target Name="CreateDefaultSourceConfig" AfterTargets="Publish" Condition="!Exists('$(PublishDir)source-config.json')">
+    <Copy SourceFiles="$(MSBuildProjectDirectory)\source-config.example.json" DestinationFiles="$(PublishDir)source-config.json" />
+  </Target>
+
+</Project>

@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using QTools.Host.Bridge;
 using QTools.Host.Logging;
+using QTools.Host.Serialization;
 
 namespace QTools.Host.Tools;
 
@@ -23,8 +24,8 @@ public sealed record ToolVersion(
 ///   ├── manifest.json / index.html     ← 激活版本（= 当前运行的文件）
 ///   ├── files/…                        ← 用户数据，跨版本保留
 ///   └── .versions/
-///       ├── 1.0.0/{manifest.json,index.html}
-///       └── 1.1.0/{manifest.json,index.html}
+///       ├── 1.0.0/{manifest.json,index.html,assets/…}
+///       └── 1.1.0/{manifest.json,index.html,assets/…}
 /// </code>
 /// </para>
 /// </summary>
@@ -33,8 +34,8 @@ public sealed partial class ToolVersionStore
     /// <summary>版本目录名（点号前缀 → 静态服务拒绝暴露）。</summary>
     public const string VersionsDirectoryName = ".versions";
 
-    /// <summary>纳入版本管理的文件（不含 files/ 等用户数据目录）。</summary>
-    private static readonly string[] VersionedEntries = ["manifest.json", "index.html"];
+    private const string UserDataDirectoryName = "files";
+    private const string NoteFileName = "note.txt";
 
     [GeneratedRegex(@"^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$")]
     private static partial Regex VersionPattern();
@@ -91,7 +92,7 @@ public sealed partial class ToolVersionStore
     /// 把工具根目录的当前文件快照成一个版本。
     /// 已存在同版本号时返回 false（不覆盖，避免回滚后重复快照相互踩踏）。
     /// </summary>
-    public bool Snapshot(string toolDirectory, string version, string? note = null)
+    public bool Snapshot(string toolDirectory, string version, string? note = null, bool replaceExisting = false)
     {
         if (!IsValidVersion(version))
         {
@@ -99,24 +100,44 @@ public sealed partial class ToolVersionStore
         }
 
         var target = VersionDirectory(toolDirectory, version);
-        if (Directory.Exists(target))
+        if (Directory.Exists(target) && !replaceExisting)
         {
             return false;
         }
 
-        Directory.CreateDirectory(target);
-        foreach (var entry in VersionedEntries)
+        var temporary = Path.Combine(VersionsRoot(toolDirectory), ".snapshot-" + Guid.NewGuid().ToString("N")[..12]);
+        var backup = target + ".old-" + Guid.NewGuid().ToString("N")[..12];
+        var replaced = false;
+        Directory.CreateDirectory(VersionsRoot(toolDirectory));
+        try
         {
-            var source = Path.Combine(toolDirectory, entry);
-            if (File.Exists(source))
+            CopyVersionTree(toolDirectory, temporary, excludeNote: false);
+            if (!string.IsNullOrWhiteSpace(note))
             {
-                File.Copy(source, Path.Combine(target, entry), overwrite: false);
+                File.WriteAllText(Path.Combine(temporary, NoteFileName), note);
+            }
+
+            if (Directory.Exists(target))
+            {
+                Directory.Move(target, backup);
+                replaced = true;
+            }
+
+            Directory.Move(temporary, target);
+            if (replaced)
+            {
+                TryDeleteDirectory(backup);
             }
         }
-
-        if (!string.IsNullOrWhiteSpace(note))
+        catch
         {
-            File.WriteAllText(Path.Combine(target, "note.txt"), note);
+            TryDeleteDirectory(temporary);
+            if (replaced && !Directory.Exists(target) && Directory.Exists(backup))
+            {
+                Directory.Move(backup, target);
+            }
+
+            throw;
         }
 
         Log.Info($"已创建工具版本快照 {version}（{Path.GetFileName(toolDirectory)}）");
@@ -124,7 +145,7 @@ public sealed partial class ToolVersionStore
     }
 
     /// <summary>
-    /// 把指定版本设为激活版本：用快照覆盖根目录文件。
+    /// 把指定版本设为激活版本：完整替换代码与静态资源，保留 files/ 和 .versions/。
     /// 切换前会先把当前根目录内容重新快照回它自己的版本号（保证历史不丢）。
     /// </summary>
     public bool Activate(string toolDirectory, string currentVersion, string targetVersion)
@@ -140,26 +161,178 @@ public sealed partial class ToolVersionStore
             throw new BridgeException("VERSION_NOT_FOUND", $"版本 {targetVersion} 不存在");
         }
 
-        // 先把当前状态存回它自己的版本号（若根目录与快照已有差异）
+        ValidateSnapshot(toolDirectory, source, targetVersion);
         if (!string.Equals(currentVersion, targetVersion, StringComparison.Ordinal))
         {
-            Snapshot(toolDirectory, currentVersion);
+            Snapshot(toolDirectory, currentVersion, replaceExisting: true);
         }
 
-        foreach (var entry in VersionedEntries)
+        var temporary = Path.Combine(VersionsRoot(toolDirectory), ".activate-" + Guid.NewGuid().ToString("N")[..12]);
+        var oldRoot = Path.Combine(temporary, "old");
+        var newRoot = Path.Combine(temporary, "new");
+        var movedOld = new List<(string Source, string Backup)>();
+        var movedNew = new List<string>();
+        var preserveTemporary = false;
+        Directory.CreateDirectory(temporary);
+        try
         {
-            var from = Path.Combine(source, entry);
-            var to = Path.Combine(toolDirectory, entry);
-            if (File.Exists(from))
+            CopyVersionTree(source, newRoot, excludeNote: true);
+            Directory.CreateDirectory(oldRoot);
+            foreach (var entry in EnumerateVersionEntries(toolDirectory))
             {
-                var temp = to + ".switch-tmp";
-                File.Copy(from, temp, overwrite: true);
-                File.Move(temp, to, overwrite: true);
+                var backup = Path.Combine(oldRoot, Path.GetFileName(entry));
+                MovePath(entry, backup);
+                movedOld.Add((entry, backup));
             }
+
+            foreach (var entry in EnumerateVersionEntries(newRoot))
+            {
+                var target = Path.Combine(toolDirectory, Path.GetFileName(entry));
+                MovePath(entry, target);
+                movedNew.Add(target);
+            }
+        }
+        catch (Exception ex)
+        {
+            Exception? rollbackError = null;
+            foreach (var target in movedNew.AsEnumerable().Reverse())
+            {
+                if (!TryDeletePath(target)) { rollbackError ??= new IOException($"无法删除新版本文件 {target}"); }
+            }
+
+            foreach (var (entry, backup) in movedOld.AsEnumerable().Reverse())
+            {
+                try
+                {
+                    if (Directory.Exists(backup) || File.Exists(backup))
+                    {
+                        MovePath(backup, entry);
+                    }
+                    else
+                    {
+                        rollbackError ??= new FileNotFoundException("版本回滚备份缺失", backup);
+                    }
+                }
+                catch (Exception restoreError)
+                {
+                    rollbackError ??= restoreError;
+                }
+            }
+
+            if (rollbackError is not null)
+            {
+                preserveTemporary = true;
+                throw new AggregateException("版本切换失败且自动回滚未完成，备份已保留", ex, rollbackError);
+            }
+
+            throw;
+        }
+        finally
+        {
+            if (!preserveTemporary) { TryDeleteDirectory(temporary); }
         }
 
         Log.Info($"已切换工具 {Path.GetFileName(toolDirectory)} 到版本 {targetVersion}");
         return true;
+    }
+
+    private static void ValidateSnapshot(string toolDirectory, string snapshot, string version)
+    {
+        var manifestPath = Path.Combine(snapshot, "manifest.json");
+        if (!File.Exists(manifestPath))
+        {
+            throw new BridgeException("VERSION_SWITCH_FAILED", "历史版本缺少 manifest.json，无法切换");
+        }
+
+        ToolManifest? manifest;
+        try
+        {
+            manifest = JsonSerializer.Deserialize(
+                File.ReadAllText(manifestPath), AppJsonContext.Default.ToolManifest);
+        }
+        catch (JsonException)
+        {
+            throw new BridgeException("VERSION_SWITCH_FAILED", "历史版本 manifest.json 无法解析");
+        }
+
+        var errors = manifest is null
+            ? new[] { "manifest.json 无法解析" }
+            : ToolManifestValidator.Validate(manifest, Path.GetFileName(toolDirectory));
+        if (errors.Count > 0)
+        {
+            throw new BridgeException("VERSION_SWITCH_FAILED", $"历史版本校验失败：{errors[0]}");
+        }
+
+        if (manifest!.Version != version || !File.Exists(Path.Combine(snapshot, manifest.Entry.Replace('/', Path.DirectorySeparatorChar))))
+        {
+            throw new BridgeException("VERSION_SWITCH_FAILED", "历史版本号或入口文件与快照不一致");
+        }
+    }
+
+    private static void CopyVersionTree(string source, string destination, bool excludeNote)
+    {
+        Directory.CreateDirectory(destination);
+        foreach (var entry in EnumerateVersionEntries(source))
+        {
+            var target = Path.Combine(destination, Path.GetFileName(entry));
+            if (Directory.Exists(entry))
+            {
+                CopyDirectory(entry, target);
+            }
+            else if (!excludeNote || !string.Equals(Path.GetFileName(entry), NoteFileName, StringComparison.Ordinal))
+            {
+                File.Copy(entry, target);
+            }
+        }
+    }
+
+    private static IEnumerable<string> EnumerateVersionEntries(string directory) =>
+        Directory.EnumerateFileSystemEntries(directory)
+            .Where(entry =>
+            {
+                var name = Path.GetFileName(entry);
+                return !name.StartsWith('.') &&
+                    !string.Equals(name, UserDataDirectoryName, StringComparison.OrdinalIgnoreCase);
+            });
+
+    private static void CopyDirectory(string source, string destination)
+    {
+        Directory.CreateDirectory(destination);
+        foreach (var file in Directory.EnumerateFiles(source))
+        {
+            File.Copy(file, Path.Combine(destination, Path.GetFileName(file)));
+        }
+
+        foreach (var directory in Directory.EnumerateDirectories(source))
+        {
+            CopyDirectory(directory, Path.Combine(destination, Path.GetFileName(directory)));
+        }
+    }
+
+    private static void MovePath(string source, string destination)
+    {
+        if (Directory.Exists(source)) { Directory.Move(source, destination); }
+        else { File.Move(source, destination); }
+    }
+
+    private static bool TryDeletePath(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path)) { Directory.Delete(path, recursive: true); }
+            else if (File.Exists(path)) { File.Delete(path); }
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    private static void TryDeleteDirectory(string path)
+    {
+        try { if (Directory.Exists(path)) { Directory.Delete(path, recursive: true); } }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
     }
 
     /// <summary>删除一个历史版本（不能删激活版本）。</summary>

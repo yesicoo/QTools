@@ -136,6 +136,68 @@ public sealed class WebToolStore
         return loaded;
     }
 
+    /// <summary>从工具源安装在线工具：同 ID 且网址一致时覆盖元数据，网址冲突则拒绝。</summary>
+    public async System.Threading.Tasks.Task<LoadedWebTool> SaveFromSourceAsync(
+        WebToolEntry entry, System.Threading.CancellationToken cancellationToken)
+    {
+        var current = _registry.Find(entry.Id);
+        if (current is not null &&
+            !string.Equals(current.Entry.Url.Trim(), entry.Url.Trim(), StringComparison.OrdinalIgnoreCase))
+        {
+            throw new BridgeException("WEB_ID_CONFLICT", $"本地已存在同 ID 但网址不同的在线工具「{current.Name}」");
+        }
+
+        var normalized = entry with
+        {
+            Name = entry.Name.Trim(),
+            Url = entry.Url.Trim(),
+            Category = string.IsNullOrWhiteSpace(entry.Category) ? null : entry.Category.Trim(),
+            Glyph = string.IsNullOrWhiteSpace(entry.Glyph) ? null : entry.Glyph.Trim(),
+            Description = string.IsNullOrWhiteSpace(entry.Description) ? null : entry.Description.Trim(),
+        };
+        var errors = WebToolValidator.Validate(normalized, normalized.Id);
+        if (errors.Count > 0)
+        {
+            throw new BridgeException("WEB_INVALID", string.Join("；", errors));
+        }
+
+        var directory = Path.Combine(_webToolsRoot, normalized.Id);
+        var path = Path.Combine(directory, "web.json");
+        var temporary = path + ".source-tmp";
+        try
+        {
+            Directory.CreateDirectory(directory);
+            await File.WriteAllTextAsync(
+                temporary,
+                JsonSerializer.Serialize(normalized, AppJsonContext.Default.WebToolEntry),
+                new UTF8Encoding(false),
+                cancellationToken).ConfigureAwait(false);
+            File.Move(temporary, path, overwrite: true);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            TryDelete(temporary);
+            Log.Error($"安装工具源在线工具失败 {normalized.Id}", ex);
+            throw new BridgeException("WEB_SAVE_FAILED", $"保存在线工具失败：{ex.Message}");
+        }
+
+        var loaded = _registry.Reload(normalized.Id);
+        if (loaded is null || !loaded.IsValid)
+        {
+            var reason = loaded?.Errors is { Count: > 0 } ? string.Join("；", loaded.Errors) : "未知原因";
+            throw new BridgeException("WEB_INVALID", $"在线工具未通过校验：{reason}");
+        }
+
+        Log.Info($"已从工具源保存在线工具 {normalized.Id}（{normalized.Name}）→ {normalized.Url}");
+        return loaded;
+    }
+
+    private static void TryDelete(string path)
+    {
+        try { if (File.Exists(path)) { File.Delete(path); } }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+    }
+
     /// <summary>
     /// 重命名在线工具：只改 web.json 的 name，锁定 id / 网址 / 目录 / 类别 / 图标不变，
     /// 校验后原子写入并重扫（使用频次与窗口绑定都不受改名影响）。

@@ -863,6 +863,7 @@ public sealed class ShellHost
                 "create" => "AI 创建工具 — QTools",
                 "import" => "导入工具 — QTools",
                 "web" => "添加在线工具 — QTools",
+                "source" => "工具源 — QTools",
                 _ => "QTools",
             };
 
@@ -1818,7 +1819,7 @@ public sealed class ShellHost
     }
 
     /// <summary>打开原生保存对话框，让用户选导出位置（未选择返回 null）。</summary>
-    public System.Threading.Tasks.Task<string?> PickExportFileAsync(string defaultFileName)
+    public System.Threading.Tasks.Task<string?> PickExportFileAsync(string defaultFileName, string title = "导出条目")
     {
         return InvokeOnUiThreadAsync(() =>
         {
@@ -1835,7 +1836,7 @@ public sealed class ShellHost
             };
 
             var picked = _mainWindow.ShowSaveFile(
-                "导出条目",
+                title,
                 string.Empty,
                 filters,
                 defaultFileName);
@@ -1930,6 +1931,65 @@ public sealed class ShellHost
 
     /// <summary>在线工具窗口在窗口表中的键（与 toolId 同一命名空间，避免冲突）。</summary>
     public static string WebWindowKey(string webId) => "web:" + webId;
+
+    /// <summary>源站在线预览窗口在窗口表中的键（与 toolId 同一命名空间，避免冲突）。</summary>
+    public static string SourceWindowKey(string toolId) => "source:" + toolId;
+
+    /// <summary>
+    /// 打开源站在线预览：独立 WebView 直接加载源站沙箱页面，不注入任何本地桥接能力。
+    /// </summary>
+    public async System.Threading.Tasks.Task OpenSourcePreviewAsync(string toolId, string name, Uri url)
+    {
+        if ((url.Scheme != "http" && url.Scheme != "https") || !string.IsNullOrEmpty(url.UserInfo))
+        {
+            throw new BridgeException("SOURCE_PREVIEW_URL_INVALID", "在线预览地址必须是 HTTP(S)，且不能包含账号");
+        }
+
+        var key = SourceWindowKey(toolId);
+        await InvokeOnUiThreadAsync(() =>
+        {
+            if (_toolWindows.TryGetValue(key, out var existing))
+            {
+                if (!existing.IsClosed)
+                {
+                    existing.SetTitle($"{name} — 在线预览");
+                    existing.Load(url);
+                    existing.Show();
+                    existing.Activate();
+                    return System.Threading.Tasks.Task.CompletedTask;
+                }
+
+                _toolWindows.Remove(key);
+            }
+
+            var window = new PhotinoWindow()
+                .SetTitle($"{name} — 在线预览")
+                .SetUseOsDefaultSize(false)
+                .SetSize(1100, 760)
+                .SetMinSize(640, 480)
+                .SetResizable(true)
+                .SetContextMenuEnabled(_devMode)
+                .SetDevToolsEnabled(_devMode)
+                .SetUserDataFolder(QTools.Host.Configuration.AppPaths.WebViewUserDataDirectory)
+                .Center()
+                .RegisterClosingHandler((_, _) => Log.Info($"工具源预览窗口请求关闭：{toolId}"))
+                .RegisterClosedHandler((_, _) =>
+                {
+                    Log.Info($"工具源预览窗口已关闭：{toolId}");
+                    _toolWindows.Remove(key);
+                })
+                .Load(url);
+
+            _toolWindows[key] = window;
+            ApplyWindowIcon(window);
+            AttachWindowTheme(window);
+            ApplyWindowChrome(window);
+            window.Show();
+            ApplyWindowChrome(window, refreshFrame: true);
+            Log.Info($"已打开工具源预览 {toolId} → {url}");
+            return System.Threading.Tasks.Task.CompletedTask;
+        }).ConfigureAwait(false);
+    }
 
     /// <summary>
     /// 打开（或聚焦）一个在线工具窗口：WebView 直接加载外部网址。

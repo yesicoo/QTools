@@ -1,0 +1,6 @@
+{
+  "addr": "0.0.0.0:58088",
+  "data": "./data",
+  "secureCookie": false,
+  "adminPassword": "234567"
+}

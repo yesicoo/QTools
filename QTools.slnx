@@ -4,5 +4,9 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/QTools.Tests/QTools.Tests.csproj" />
+    <Project Path="tests/QTools.Source.Tests/QTools.Source.Tests.csproj" />
+  </Folder>
+  <Folder Name="/services/">
+    <Project Path="source-service/QTools.Source.csproj" />
   </Folder>
 </Solution>

@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>工具详情 · QTools 工具源</title>
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+  <header class="site-header"><div class="container header-inner"><a class="brand" href="/"><span class="brand-mark">Q</span><span>QTools 工具源</span></a><nav class="nav"><a href="/">返回目录</a><a href="/submit">提交工具</a></nav></div></header>
+  <main class="container">
+    <div id="error" class="error-box hidden" role="alert"></div>
+    <div id="detail" class="detail-grid hidden">
+      <section class="card panel">
+        <div class="tool-head"><div id="glyph" class="glyph">◇</div><div><h1 id="name" class="tool-title"></h1><div id="version" class="tool-footer"></div></div></div>
+        <p id="description" class="tool-description"></p>
+        <div class="form-actions"><a id="web-open" class="button primary" href="#" target="_blank" rel="noopener" hidden>打开网址</a><a id="download" class="button primary" href="#">下载 .qtools</a><a class="button" href="/submit">提交新版本</a></div>
+        <h2>安装说明</h2>
+        <div class="source-connect">
+          <div class="source-connect-head">
+            <span>源网址</span>
+            <button class="text-button" type="button" data-copy-source-url>复制</button>
+          </div>
+          <code class="source-url" data-source-url>读取中…</code>
+          <p class="source-connect-hint">把当前网站配置成 QTools 工具源：打开「设置 → 工具源」，粘贴上方源网址并保存，测试连接通过后回到「工具源」即可浏览和安装。</p>
+        </div>
+        <div class="notice">下载包会经过 SHA256 校验和本地安全审查。</div>
+        <dl class="meta-list" id="metadata"></dl>
+      </section>
+      <section id="preview-panel" class="card panel"><h2>在线沙箱预览</h2><div class="notice">预览禁止同源访问，不提供 AI、文件、硬件或管理能力；存储按工具隔离。</div><iframe id="preview" class="preview-frame" title="工具在线预览" sandbox="allow-scripts" referrerpolicy="no-referrer" data-preview-host></iframe></section>
+    </div>
+    <section id="ranking" class="card panel ranking-panel hidden">
+      <div class="ranking-head">
+        <div><h2>下载排行</h2><p>按公开目录的累计下载次数排序。</p></div>
+        <a class="text-button" href="/">查看全部工具</a>
+      </div>
+      <ol id="ranking-list" class="ranking-list"></ol>
+    </section>
+    <div id="loading" class="empty">正在读取工具详情…</div>
+  </main>
+  <script src="/assets/site.js"></script>
+  <script src="/assets/preview-host.js"></script>
+  <script src="/assets/tool.js"></script>
+</body>
+</html>

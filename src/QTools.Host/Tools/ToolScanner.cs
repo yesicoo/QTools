@@ -84,16 +84,6 @@ public sealed class ToolRegistry
 
         var directory = tool.Directory;
         _versionStore.Activate(directory, tool.ActiveVersion, version);
-
-        // 用新版本快照里的 manifest 覆盖根目录 manifest，保证 version 字段同步
-        var snapshotManifest = Path.Combine(ToolVersionStore.VersionDirectory(directory, version), "manifest.json");
-        if (File.Exists(snapshotManifest))
-        {
-            var temp = Path.Combine(directory, "manifest.json.switch-tmp");
-            File.Copy(snapshotManifest, temp, overwrite: true);
-            File.Move(temp, Path.Combine(directory, "manifest.json"), overwrite: true);
-        }
-
         var reloaded = Reload(toolId);
         if (reloaded is null)
         {

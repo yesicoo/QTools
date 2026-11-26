@@ -381,6 +381,8 @@
      *      / listBackups / createBackup / restoreBackup / deleteBackup / importBackupFile
      *      / openBackupDirectory / getBackupConfig / setBackupConfig / gitPush / gitRestore
      *      / setHotkeyEnabled / setTrayMenuItems / cancelRequest
+     *      / getSourceConfig / setSourceConfig / testSource / sourceCatalog / sourceTool
+     *      / sourceInstall / sourceDownload / sourceSubmit / sourcePreview（工具源直接安装 / 保存安装包 / 提交 / 无桥接预览）
      *      / getTheme / setTheme（界面主题 system / light / dark）
      *      / notify（系统通知：{ title, body?, level?: "info"|"warning"|"error" }，仅 Windows）
      *      / trayMenuList / trayMenuReady / hideTrayMenu / exitApp（托盘弹层：前五项 / 就绪 / 收起 / 退出）
@@ -388,7 +390,8 @@
     callManager: function (method, payload) {
       var long = ["manager.generateTool", "manager.generateUpdate", "manager.fixTool",
         "manager.pickProgram", "manager.gitPush", "manager.gitRestore", "manager.importBackupFile",
-        "manager.exportItem", "manager.pickImportFile", "manager.importItemPackage"];
+        "manager.exportItem", "manager.pickImportFile", "manager.importItemPackage",
+        "manager.sourceInstall", "manager.sourceDownload", "manager.sourceSubmit", "manager.sourcePreview"];
       var medium = ["manager.createBackup", "manager.restoreBackup"];
       var timeout = long.indexOf(method) >= 0 ? AI_TIMEOUT_MS
         : medium.indexOf(method) >= 0 ? 300000 : 30000;

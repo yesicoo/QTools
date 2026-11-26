@@ -11,7 +11,11 @@ public sealed record WebToolEntry(
     string? Category,
     string? Glyph,
     string CreatedAt,
-    string? Description = null);
+    string? Description = null)
+{
+    /// <summary>在线工具的版本（随上传统一分享时使用；旧 web.json 缺省为 1.0.0）。</summary>
+    public string Version { get; init; } = "1.0.0";
+}
 
 /// <summary>已加载的在线工具 + 校验状态。</summary>
 public sealed class LoadedWebTool
@@ -96,6 +100,11 @@ public static partial class WebToolValidator
         if (entry.Glyph is { Length: > 4 })
         {
             errors.Add("glyph 不超过 4 字符");
+        }
+
+        if (!QTools.Host.Tools.ToolManifestValidator.VersionPattern().IsMatch(entry.Version ?? ""))
+        {
+            errors.Add("version 必须是语义化版本（如 1.0.0）");
         }
 
         return errors;

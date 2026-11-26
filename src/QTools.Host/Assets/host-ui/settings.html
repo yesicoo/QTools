@@ -89,6 +89,23 @@
   </section>
 
   <section class="panel">
+    <h2>工具源</h2>
+    <p class="hint">配置兼容 QTools 的工具源服务地址后，可在主窗口「工具源」中浏览、安装更新和提交本地工具。
+      源站在线预览使用隔离沙箱，不会获得本机 AI、文件或窗口能力。</p>
+    <div class="form">
+      <label>源站地址
+        <input id="source-baseurl" type="text" maxlength="1000" placeholder="http://127.0.0.1:8088" spellcheck="false" autocomplete="off">
+      </label>
+    </div>
+    <div class="row">
+      <button id="source-save" class="btn primary" type="button">保存地址</button>
+      <button id="source-test" class="btn ghost" type="button">测试连接</button>
+      <button id="source-open" class="btn ghost" type="button">打开工具源</button>
+      <span id="source-config-status" class="badge none">未配置</span>
+    </div>
+  </section>
+
+  <section class="panel">
     <h2>全局热键</h2>
     <p class="hint">开启后在任意位置按 <kbd>Alt</kbd>+<kbd>Space</kbd> 呼出 / 隐藏主窗口（仅 Windows 支持）。</p>
     <div class="row">

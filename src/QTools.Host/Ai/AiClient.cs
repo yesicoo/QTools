@@ -728,6 +728,7 @@ public static class ConfigStore
                 },
                 Backup = config.Backup ?? Configuration.AppConfig.Default.Backup,
                 Shell = config.Shell ?? Configuration.AppConfig.Default.Shell,
+                Source = config.Source ?? Configuration.AppConfig.Default.Source,
             };
         }
         catch (JsonException)

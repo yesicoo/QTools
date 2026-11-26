@@ -35,6 +35,7 @@ namespace QTools.Host.Serialization;
 [JsonSerializable(typeof(Configuration.ServerConfigSection))]
 [JsonSerializable(typeof(Configuration.StorageConfigSection))]
 [JsonSerializable(typeof(Configuration.BackupConfigSection))]
+[JsonSerializable(typeof(Configuration.SourceConfigSection))]
 [JsonSerializable(typeof(Configuration.ShellConfigSection))]
 [JsonSerializable(typeof(Configuration.ToolWindowState))]
 [JsonSerializable(typeof(FilesSavePayload))]
@@ -102,6 +103,13 @@ namespace QTools.Host.Serialization;
 [JsonSerializable(typeof(EmbedToolView))]
 [JsonSerializable(typeof(ThemeView))]
 [JsonSerializable(typeof(Launcher.SingleInstanceMessage))]
+[JsonSerializable(typeof(Source.SourceConfigView))]
+[JsonSerializable(typeof(Source.SourceToolView))]
+[JsonSerializable(typeof(Source.SourceCatalogView))]
+[JsonSerializable(typeof(Source.SourceToolDetailView))]
+[JsonSerializable(typeof(Source.SourceInstallResult))]
+[JsonSerializable(typeof(Source.SourceSubmitResult))]
+[JsonSerializable(typeof(Source.SourceDownloadResult))]
 internal partial class AppJsonContext : JsonSerializerContext;
 
 /// <summary>/health 响应。</summary>

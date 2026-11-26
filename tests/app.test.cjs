@@ -54,7 +54,7 @@ class Element {
   }
   set innerHTML(value) { this.html = value; this.children = []; }
   get innerHTML() { return this.html || ''; }
-  appendChild(child) { this.children.push(child); return child; }
+  appendChild(child) { child.parentNode = this; this.children.push(child); return child; }
   addEventListener(event, handler) { (this.handlers[event] ||= []).push(handler); }
   getAttribute(name) { assert.equal(name, 'src'); return this.src || null; }
   getBoundingClientRect() { return { left: 12, top: 20, right: 300, bottom: 46, width: 288, height: 26 }; }
@@ -70,7 +70,8 @@ class Element {
 }
 
 async function setup(options = {}) {
-  const { mode = 'main', view, toolId, list = items, toolList = tools } = options;
+  const { mode = 'main', view, toolId, list = items, toolList = tools, manualTimers = false } = options;
+  const timers = [];
   const search = mode === 'content'
     ? `?mode=content${view ? `&view=${view}` : ''}${toolId ? `&toolId=${toolId}` : ''}`
     : '';
@@ -129,7 +130,7 @@ async function setup(options = {}) {
   /* 导入页：原生对话框由后端弹出，测试里直接回填选择结果 */
   const pickFile = async payload => { click('import-pick'); await reply('pickImportFile', payload); };
   const view_ = id => {
-    for (const name of ['tool-view', 'content-home', 'create-view', 'version-view', 'import-view', 'web-view']) {
+    for (const name of ['tool-view', 'content-home', 'create-view', 'version-view', 'import-view', 'web-view', 'source-view']) {
       assert.equal(el(name).hidden, name !== id, `视图状态错误：${name}`);
     }
   };
@@ -150,14 +151,15 @@ async function setup(options = {}) {
       querySelectorAll: query, querySelector: selector => query(selector)[0] || null,
       addEventListener: (event, handler) => { (documentHandlers[event] ||= []).push(handler); }
     },
-    setTimeout: () => 1, clearTimeout() {}, confirm: options.confirm || (() => true)
+    setTimeout: callback => { if (manualTimers) { timers.push(callback); return timers.length; } return 1; }, clearTimeout() {}, confirm: options.confirm || (() => true)
   }, { filename: `${ui}/app.js` });
   if (mode === 'content') {
     await reply('listTools', { tools: toolList });
   } else {
     await reply('launcherList', { items: list, index: indexInfo });
   }
-  return { el, click, navItem, requests, last, reply, embed, versions, pickFile, view: view_, fireWindow, fireDocument, liOf, menuOf, menuAction, body, nodes };
+  const runTimers = () => { timers.splice(0).forEach(callback => callback()); };
+  return { el, click, navItem, requests, last, reply, embed, versions, pickFile, view: view_, fireWindow, fireDocument, liOf, menuOf, menuAction, body, nodes, create: tag => new Element(`<${tag}>`), runTimers };
 }
 
 /* ================= 主窗口：统一列表 ================= */
@@ -1176,6 +1178,401 @@ async function setupTheme(replyOf) {
   return { attrs, calls, fire };
 }
 
+/* ================= 工具源：目录 / 预览 / 安装更新 / 提交 ================= */
+
+const sourceCatalog = {
+  items: [{
+    id: 'calc', name: '计算器', version: '2.0.0', description: '源站计算器', category: '效率',
+    glyph: '算', permissions: ['storage'], sizeBytes: 2048, sha256: 'a'.repeat(64),
+    previewUrl: '/preview/submission-1', downloadUrl: '/download/calc', versions: ['1.0.0', '2.0.0']
+  }],
+  total: 50, page: 1, pageSize: 24, categories: ['效率', '开发']
+};
+const sourceManifest = {
+  id: 'calc', name: '计算器', version: '2.0.0', description: '源站计算器', entry: 'index.html',
+  permissions: ['storage'], window: { width: 640, height: 480, resizable: true },
+  createdAt: '2026-01-01T00:00:00Z', allowEval: false
+};
+const sourceDetail = (version = '2.0.0') => ({
+  tool: { ...sourceCatalog.items[0], version }, manifest: { ...sourceManifest, version }
+});
+const sourceConfig = { baseUrl: 'https://source.example', connected: true, serviceVersion: '1.0.0' };
+
+async function openSource(options = {}) {
+  const h = await setup({ mode: 'content', view: 'source', manualTimers: true, ...options });
+  await h.reply('getSourceConfig', sourceConfig);
+  await h.reply('sourceCatalog', sourceCatalog);
+  await h.reply('getSourceConfig', sourceConfig);
+  await h.reply('listTools', { tools });
+  await h.reply('launcherList', { items: options.list || items, index: indexInfo });
+  h.view('source-view');
+  return h;
+}
+
+function requestSourceDetail(h, version = '2.0.0') {
+  const button = h.create('button');
+  button.dataset.sourceAction = 'detail';
+  button.dataset.sourceId = 'calc';
+  h.el('source-grid').appendChild(button);
+  h.el('source-grid').fire('click', { target: button });
+  return h.last('sourceTool');
+}
+
+async function openSourceDetail(h, version = '2.0.0') {
+  const request = requestSourceDetail(h, version);
+  assert.deepEqual(plain(request.payload), { id: 'calc', version });
+  request.resolve(sourceDetail(version));
+  await flush();
+  assert.equal(h.el('source-detail').hidden, false);
+}
+
+async function finishSourceInstall(h, result) {
+  await h.reply('sourceInstall', result);
+  await h.reply('listTools', { tools });
+  await h.reply('sourceCatalog', sourceCatalog);
+  await h.reply('getSourceConfig', sourceConfig);
+}
+
+test('工具源入口仅在配置源地址后显示', async () => {
+  const h = await setup();
+  assert.equal(h.el('source-tools').hidden, true);
+  await h.reply('getSourceConfig', { baseUrl: '', connected: false });
+  assert.equal(h.el('source-tools').hidden, true, '未配置源地址时不应显示入口');
+
+  h.fireWindow('focus');
+  await h.reply('getSourceConfig', sourceConfig);
+  assert.equal(h.el('source-tools').hidden, false, '配置源地址后应显示入口');
+
+  h.fireWindow('focus');
+  await h.reply('getSourceConfig', { baseUrl: '', connected: false });
+  assert.equal(h.el('source-tools').hidden, true, '清空源地址后应重新隐藏入口');
+});
+
+test('内容窗口同样隐藏未配置的工具源入口', async () => {
+  const h = await setup({ mode: 'content' });
+  await h.reply('getSourceConfig', { baseUrl: '', connected: false });
+  assert.equal(h.el('source-tools').hidden, true);
+});
+
+test('主窗口工具源入口打开 source 内容面板', async () => {
+  const h = await setup();
+  await h.reply('getSourceConfig', sourceConfig);
+  assert.equal(h.el('source-tools').hidden, false);
+  h.click('source-tools');
+  assert.deepEqual(plain(h.last('openContent').payload), { view: 'source' });
+});
+
+test('工具源目录展示分页，搜索、分类和下一页携带查询条件', async () => {
+  const h = await openSource();
+  assert.equal(h.last('sourceCatalog').payload.pageSize, 24);
+  assert.match(h.el('source-grid').children[0].innerHTML, /计算器/);
+  assert.match(h.el('source-grid').children[0].innerHTML, /沙箱预览/);
+  assert.equal(h.el('source-category').innerHTML.includes('开发'), true);
+  assert.match(h.el('source-page').textContent, /第 1 \/ 3 页 · 共 50 个工具/);
+  assert.equal(h.el('source-next').disabled, false);
+
+  h.el('source-search').value = '  计算  ';
+  h.el('source-search').fire('input');
+  h.runTimers();
+  await flush();
+  assert.equal(h.last('sourceCatalog').payload.q, '计算');
+  assert.equal(h.last('sourceCatalog').payload.page, 1);
+  await h.reply('sourceCatalog', sourceCatalog);
+  await h.reply('getSourceConfig', sourceConfig);
+
+  h.el('source-category').value = '开发';
+  h.el('source-category').fire('change');
+  assert.deepEqual(plain(h.last('sourceCatalog').payload), { q: '计算', category: '开发', page: 1, pageSize: 24 });
+  await h.reply('sourceCatalog', { ...sourceCatalog, page: 1 });
+  await h.reply('getSourceConfig', sourceConfig);
+
+  h.click('source-next');
+  assert.equal(h.last('sourceCatalog').payload.page, 2);
+  await h.reply('sourceCatalog', { ...sourceCatalog, page: 2 });
+  await h.reply('getSourceConfig', sourceConfig);
+  assert.match(h.el('source-page').textContent, /第 2 \/ 3 页/);
+});
+
+test('工具源卡片沙箱预览调用宿主预览方法并携带版本', async () => {
+  const h = await openSource();
+  const button = h.create('button');
+  button.dataset.sourceAction = 'preview';
+  button.dataset.sourceId = 'calc';
+  button.dataset.sourceVersion = '1.0.0';
+  const icon = h.create('span');
+  button.appendChild(icon);
+  h.el('source-grid').appendChild(button);
+  h.el('source-grid').fire('click', { target: icon });
+  assert.deepEqual(plain(h.last('sourcePreview').payload), { id: 'calc', version: '1.0.0' });
+  await h.reply('sourcePreview', { ok: true });
+  assert.match(h.el('toast').textContent, /隔离预览窗口/);
+});
+
+test('工具源历史版本详情请求指定版本并同步安装版本', async () => {
+  const h = await openSource();
+  await openSourceDetail(h);
+  assert.equal(h.el('source-version').innerHTML.includes('v1.0.0'), true);
+  h.el('source-version').value = '1.0.0';
+  h.el('source-version').fire('change');
+  assert.deepEqual(plain(h.last('sourceTool').payload), { id: 'calc', version: '1.0.0' });
+  await h.reply('sourceTool', sourceDetail('1.0.0'));
+  assert.equal(h.el('source-version').value, '1.0.0');
+  assert.match(h.el('source-detail-meta').innerHTML, /<dd>1\.0\.0<\/dd>/);
+  h.click('source-detail-preview');
+  assert.deepEqual(plain(h.last('sourcePreview').payload), { id: 'calc', version: '1.0.0' });
+});
+
+test('工具源高危审查未勾选时不能安装，确认后携带显式接受参数', async () => {
+  const h = await openSource();
+  await openSourceDetail(h);
+  h.click('source-detail-install');
+  assert.deepEqual(plain(h.last('sourceInstall').payload), {
+    id: 'calc', version: '2.0.0', acceptHighSeverity: false, reviewedSha256: ''
+  });
+  await h.reply('sourceInstall', {
+    action: 'review', saved: false, requiresExplicitAcceptance: true, externalAssets: [],
+    packageSha256: 'a'.repeat(64),
+    findings: [{ severity: 1, code: 'DYNAMIC_CODE', message: '检测到动态执行代码' }]
+  });
+  assert.equal(h.el('source-review').hidden, false);
+  assert.match(h.el('source-findings').children[0].textContent, /DYNAMIC_CODE/);
+
+  h.click('source-detail-install');
+  assert.equal(h.requests('sourceInstall').length, 1, '未勾选确认不能再次发起安装');
+  assert.match(h.el('toast').textContent, /请先勾选/);
+  h.el('source-accept').checked = true;
+  h.click('source-detail-install');
+  assert.equal(h.last('sourceInstall').payload.acceptHighSeverity, true);
+  assert.equal(h.last('sourceInstall').payload.reviewedSha256, 'a'.repeat(64));
+  await finishSourceInstall(h, {
+    action: 'installed', saved: true, requiresExplicitAcceptance: false,
+    toolId: 'calc', toolName: '计算器', version: '2.0.0'
+  });
+  assert.match(h.el('toast').textContent, /已安装 计算器 v2\.0\.0/);
+});
+
+test('工具源详情包哈希变化后旧高危确认失效', async () => {
+  const h = await openSource();
+  await openSourceDetail(h);
+  h.click('source-detail-install');
+  await h.reply('sourceInstall', {
+    action: 'review', saved: false, requiresExplicitAcceptance: true, externalAssets: [],
+    packageSha256: 'b'.repeat(64), findings: [{ severity: 1, code: 'DYNAMIC_CODE', message: '动态执行' }]
+  });
+  h.el('source-accept').checked = true;
+
+  h.click('source-detail-install');
+  assert.deepEqual(plain(h.last('sourceInstall').payload), {
+    id: 'calc', version: '2.0.0', acceptHighSeverity: false, reviewedSha256: ''
+  });
+  await h.reply('sourceInstall', {
+    action: 'review', saved: false, requiresExplicitAcceptance: true, externalAssets: [],
+    packageSha256: 'a'.repeat(64), findings: [{ severity: 1, code: 'DYNAMIC_CODE', message: '动态执行' }]
+  });
+  assert.equal(h.el('source-accept').checked, false, '新审查必须清除旧勾选');
+});
+
+test('工具源切换版本后不能沿用旧版本的高危确认', async () => {
+  const h = await openSource();
+  await openSourceDetail(h);
+  h.click('source-detail-install');
+  await h.reply('sourceInstall', {
+    action: 'review', saved: false, requiresExplicitAcceptance: true, externalAssets: [],
+    packageSha256: 'a'.repeat(64),
+    findings: [{ severity: 1, code: 'DYNAMIC_CODE', message: '检测到动态执行代码' }]
+  });
+  h.el('source-accept').checked = true;
+
+  h.el('source-version').value = '1.0.0';
+  h.el('source-version').fire('change');
+  await h.reply('sourceTool', sourceDetail('1.0.0'));
+  assert.equal(h.el('source-review').hidden, true);
+  assert.equal(h.el('source-accept').checked, false);
+  h.click('source-detail-install');
+  assert.deepEqual(plain(h.last('sourceInstall').payload), {
+    id: 'calc', version: '1.0.0', acceptHighSeverity: false, reviewedSha256: ''
+  });
+  h.last('sourceInstall').reject({ message: '测试失败' });
+  await flush();
+});
+
+for (const action of ['install', 'download']) {
+  test(`工具源${action === 'install' ? '安装' : '下载'}期间锁定详情导航和操作`, async () => {
+    const h = await openSource();
+    await openSourceDetail(h);
+    h.click(`source-detail-${action}`);
+    for (const id of ['source-detail-back', 'source-version', 'source-detail-preview',
+      'source-detail-download', 'source-detail-install', 'source-detail-submit']) {
+      assert.equal(h.el(id).disabled, true, `${id} 应在忙碌期间禁用`);
+    }
+
+    h.el('source-detail-back').fire('click');
+    assert.equal(h.el('source-detail').hidden, false, '程序化点击也不能离开忙碌详情');
+    assert.equal(h.el('source-grid').hidden, true);
+    h.el('source-version').value = '1.0.0';
+    h.el('source-version').fire('change');
+    h.el('source-detail-preview').fire('click');
+    h.el('source-detail-submit').fire('click');
+    const other = action === 'install' ? 'download' : 'install';
+    h.el(`source-detail-${other}`).fire('click');
+    const otherMethod = other === 'install' ? 'sourceInstall' : 'sourceDownload';
+    assert.equal(h.requests('sourceTool').length, 1);
+    assert.equal(h.requests('sourcePreview').length, 0);
+    assert.equal(h.requests('sourceSubmit').length, 0);
+    assert.equal(h.requests(otherMethod).length, 0);
+
+    const method = action === 'install' ? 'sourceInstall' : 'sourceDownload';
+    h.requests(method)[0].reject({ message: '测试失败' });
+    await flush();
+    for (const id of ['source-detail-back', 'source-version', 'source-detail-preview',
+      'source-detail-download', 'source-detail-install', 'source-detail-submit']) {
+      assert.equal(h.el(id).disabled, false, `${id} 应在失败后恢复`);
+    }
+  });
+}
+
+test('工具源旧详情响应不会覆盖重新打开的新详情', async () => {
+  const h = await openSource();
+  const oldRequest = requestSourceDetail(h, '1.0.0');
+  h.click('source-tools');
+  const currentRequest = requestSourceDetail(h, '2.0.0');
+
+  currentRequest.resolve(sourceDetail('2.0.0'));
+  await flush();
+  oldRequest.resolve(sourceDetail('1.0.0'));
+  await flush();
+
+  assert.equal(h.el('source-detail').hidden, false);
+  assert.equal(h.el('source-grid').hidden, true);
+  assert.equal(h.el('source-version').value, '2.0.0');
+  assert.match(h.el('source-detail-meta').innerHTML, /<dd>2\.0\.0<\/dd>/);
+});
+
+for (const action of ['install', 'download']) {
+  test(`工具源重新进入视图不会清除${action === 'install' ? '安装' : '下载'}忙碌状态`, async () => {
+    const h = await openSource();
+    await openSourceDetail(h);
+    h.click(`source-detail-${action}`);
+    const method = action === 'install' ? 'sourceInstall' : 'sourceDownload';
+    const oldRequest = h.requests(method)[0];
+
+    h.click('source-tools');
+    await flush();
+    assert.equal(h.el('source-detail').hidden, true);
+    assert.equal(h.el('source-grid').hidden, false);
+    assert.equal(h.requests(method).length, 1, '忙碌期间不能重复发起请求');
+    assert.equal(h.el(`source-detail-${action}`).disabled, true);
+
+    oldRequest.resolve(action === 'install'
+      ? { action: 'installed', saved: true, toolId: 'calc', toolName: '计算器', version: '2.0.0' }
+      : { path: 'C:\\Saved\\old.qtools', fileName: 'old.qtools', sizeBytes: 123, version: '2.0.0', sha256: 'abc' });
+    await flush();
+    assert.equal(h.el(`source-detail-${action}`).disabled, false);
+    await openSourceDetail(h);
+    h.click(`source-detail-${action}`);
+    assert.equal(h.requests(method).length, 2, '旧请求完成后允许重新操作');
+    h.requests(method)[1].reject({ message: '当前请求失败' });
+    await flush();
+    assert.match(h.el('toast').textContent, /当前请求失败/);
+  });
+}
+
+test('工具源返回 unchanged 时提示不覆盖本地版本', async () => {
+  const h = await openSource();
+  await openSourceDetail(h);
+  h.click('source-detail-install');
+  await finishSourceInstall(h, {
+    action: 'unchanged', saved: false, requiresExplicitAcceptance: false,
+    toolId: 'calc', toolName: '计算器', version: '1.0.0'
+  });
+  assert.equal(h.requests('sourceInstall').length, 1);
+  assert.match(h.el('toast').textContent, /未覆盖/);
+  assert.match(h.el('source-detail-status').textContent, /无需更新/);
+});
+
+test('工具源下载调用宿主保存安装包并防止重复点击', async () => {
+  const h = await openSource();
+  await openSourceDetail(h);
+  assert.equal(h.el('source-detail-install').textContent, '直接安装 / 更新');
+  h.click('source-detail-download');
+  h.click('source-detail-download');
+  assert.equal(h.requests('sourceDownload').length, 1);
+  assert.deepEqual(plain(h.last('sourceDownload').payload), { id: 'calc', version: '2.0.0' });
+  assert.equal(h.el('source-detail-download').disabled, true);
+  assert.match(h.el('source-detail-status').textContent, /保存对话框/);
+  await h.reply('sourceDownload', {
+    path: 'C:\\Saved\\calc.qtools', fileName: 'calc.qtools', sizeBytes: 123,
+    version: '2.0.0', sha256: 'abc'
+  });
+  assert.equal(h.el('source-detail-download').disabled, false);
+  assert.match(h.el('toast').textContent, /已保存安装包：calc\.qtools/);
+  assert.match(h.el('source-detail-status').textContent, /离线分享或日后导入/);
+});
+
+test('工具源下载取消保存后恢复按钮且不报错', async () => {
+  const h = await openSource();
+  await openSourceDetail(h);
+  h.click('source-detail-download');
+  await h.reply('sourceDownload', { path: null, fileName: null, sizeBytes: 0, version: '', sha256: '' });
+  assert.equal(h.el('source-detail-download').disabled, false);
+  assert.equal(h.el('source-detail-status').textContent, '已取消保存');
+});
+
+test('工具源提交本地工具携带 kind/id 并展示选中预览与审核编号', async () => {
+  const h = await openSource();
+  const select = h.el('source-local-tools');
+  assert.match(select.innerHTML, /optgroup label="小工具"/, '小工具分组');
+  select.value = 'tool:a';
+  select.fire('change');
+  assert.equal(h.el('source-pick-preview').hidden, false);
+  assert.equal(h.el('source-pick-kind').textContent, '小工具');
+  assert.match(h.el('source-pick-name').textContent, /工具a/);
+  h.click('source-submit-local');
+  assert.deepEqual(plain(h.last('sourceSubmit').payload), { kind: 'tool', id: 'a' });
+  await h.reply('sourceSubmit', { id: 'submission-1', status: 'pending', toolId: 'a', toolName: '工具a', version: '1.2.3' });
+  assert.match(h.el('source-submit-status').textContent, /submission-1/);
+  assert.match(h.el('toast').textContent, /已提交工具源审核/);
+});
+
+const webSite = item({
+  id: 'site', kind: 'web', name: '资讯站', version: '1.0.0', searchKey: '资讯站',
+  category: '资讯', target: 'https://news.example'
+});
+
+test('在线工具同样出现在提交列表并携带 kind=web', async () => {
+  const h = await openSource({ list: [...items, webSite] });
+  const select = h.el('source-local-tools');
+  assert.match(select.innerHTML, /optgroup label="在线工具"/, '在线工具分组');
+  select.value = 'web:site';
+  select.fire('change');
+  assert.equal(h.el('source-pick-kind').textContent, '在线工具');
+  assert.match(h.el('source-pick-meta').textContent, /news\.example/);
+  h.click('source-submit-local');
+  assert.deepEqual(plain(h.last('sourceSubmit').payload), { kind: 'web', id: 'site' });
+  await h.reply('sourceSubmit', { id: 'submission-2', status: 'pending', toolId: 'site', toolName: '资讯站', version: '1.0.0' });
+  assert.match(h.el('source-submit-status').textContent, /submission-2/);
+});
+
+test('配置工具源后右键菜单可直接上传小工具与在线工具', async () => {
+  const h = await setup({ list: [...items, webSite] });
+  await h.reply('getSourceConfig', sourceConfig);
+
+  h.navItem('tool:a').fire('contextmenu', { preventDefault() {} });
+  let li = h.liOf('tool:a');
+  let upload = h.menuOf(li).children[0].children.find(b => b.children[0].textContent === '上传到工具源');
+  assert.ok(upload, '小工具菜单应有上传入口');
+  upload.click();
+  assert.deepEqual(plain(h.last('sourceSubmit').payload), { kind: 'tool', id: 'a' });
+  await h.reply('sourceSubmit', { id: 'submission-3', status: 'pending', toolId: 'a', toolName: '工具a', version: '1.2.3' });
+  assert.match(h.el('toast').textContent, /submission-3/);
+
+  h.navItem('web:site').fire('contextmenu', { preventDefault() {} });
+  li = h.liOf('web:site');
+  upload = h.menuOf(li).children[0].children.find(b => b.children[0].textContent === '上传到工具源');
+  assert.ok(upload, '在线工具菜单应有上传入口');
+  upload.click();
+  assert.deepEqual(plain(h.last('sourceSubmit').payload), { kind: 'web', id: 'site' });
+});
 test('theme.js 启动时按宿主主题写入 html 的 data-theme', async () => {
   const h = await setupTheme(() => 'dark');
   assert.deepEqual(h.calls, ['manager.getTheme']);

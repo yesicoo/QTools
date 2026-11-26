@@ -94,6 +94,65 @@ public sealed class ToolVersionTests : IDisposable
     }
 
     [Fact]
+    public async Task SwitchVersionReplacesWholeCodeTreeAndPreservesUserData()
+    {
+        var tool = await CreateToolAsync("assets", "1.0.0", "<html>v1</html>");
+        var assets = Path.Combine(tool.Directory, "assets");
+        Directory.CreateDirectory(assets);
+        await File.WriteAllTextAsync(Path.Combine(assets, "app.js"), "v1-script");
+        await File.WriteAllTextAsync(Path.Combine(assets, "style.css"), "v1-style");
+        await File.WriteAllTextAsync(Path.Combine(tool.Directory, "obsolete.txt"), "old-only");
+        Directory.CreateDirectory(Path.Combine(tool.Directory, "files"));
+        await File.WriteAllTextAsync(Path.Combine(tool.Directory, "files", "data.bin"), "user-data");
+        Directory.Delete(Path.Combine(tool.Directory, ".versions", "1.0.0"), recursive: true);
+        _registry.VersionStore.Snapshot(tool.Directory, "1.0.0");
+
+        var snapshot = Path.Combine(tool.Directory, ".versions", "2.0.0");
+        Directory.CreateDirectory(Path.Combine(snapshot, "assets"));
+        await File.WriteAllTextAsync(Path.Combine(snapshot, "manifest.json"),
+            """{"id":"assets","name":"assets","version":"2.0.0","description":"d","entry":"index.html","permissions":[],"window":{"width":500,"height":500,"resizable":true},"createdAt":"2026-11-04T00:00:00+08:00","allowEval":false,"csp":null}""");
+        await File.WriteAllTextAsync(Path.Combine(snapshot, "index.html"), "<html>v2</html>");
+        await File.WriteAllTextAsync(Path.Combine(snapshot, "assets", "app.js"), "v2-script");
+        await File.WriteAllTextAsync(Path.Combine(snapshot, "assets", "new.css"), "v2-style");
+        await File.WriteAllTextAsync(Path.Combine(snapshot, "note.txt"), "source-note");
+
+        var switched = _registry.SwitchVersion("assets", "2.0.0");
+
+        Assert.True(switched.IsValid);
+        Assert.Equal("v2-script", await File.ReadAllTextAsync(Path.Combine(tool.Directory, "assets", "app.js")));
+        Assert.True(File.Exists(Path.Combine(tool.Directory, "assets", "new.css")));
+        Assert.False(File.Exists(Path.Combine(tool.Directory, "assets", "style.css")));
+        Assert.False(File.Exists(Path.Combine(tool.Directory, "obsolete.txt")));
+        Assert.False(File.Exists(Path.Combine(tool.Directory, "note.txt")));
+        Assert.Equal("user-data", await File.ReadAllTextAsync(Path.Combine(tool.Directory, "files", "data.bin")));
+        Assert.Equal("v1-script", await File.ReadAllTextAsync(Path.Combine(tool.Directory, ".versions", "1.0.0", "assets", "app.js")));
+
+        var rolledBack = _registry.SwitchVersion("assets", "1.0.0");
+        Assert.Equal("1.0.0", rolledBack.ActiveVersion);
+        Assert.Equal("v1-script", await File.ReadAllTextAsync(Path.Combine(tool.Directory, "assets", "app.js")));
+        Assert.True(File.Exists(Path.Combine(tool.Directory, "assets", "style.css")));
+        Assert.True(File.Exists(Path.Combine(tool.Directory, "obsolete.txt")));
+        Assert.False(File.Exists(Path.Combine(tool.Directory, "assets", "new.css")));
+        Assert.Equal("user-data", await File.ReadAllTextAsync(Path.Combine(tool.Directory, "files", "data.bin")));
+    }
+
+    [Fact]
+    public async Task InvalidSnapshotDoesNotChangeActiveFiles()
+    {
+        var tool = await CreateToolAsync("invalid", "1.0.0", "<html>original</html>");
+        var snapshot = Path.Combine(tool.Directory, ".versions", "2.0.0");
+        Directory.CreateDirectory(snapshot);
+        await File.WriteAllTextAsync(Path.Combine(snapshot, "manifest.json"),
+            """{"id":"invalid","name":"invalid","version":"2.0.0","description":"d","entry":"missing.html","permissions":[],"window":{"width":500,"height":500,"resizable":true},"createdAt":"2026-11-04T00:00:00+08:00","allowEval":false,"csp":null}""");
+
+        var error = Assert.Throws<BridgeException>(() => _registry.SwitchVersion("invalid", "2.0.0"));
+
+        Assert.Equal("VERSION_SWITCH_FAILED", error.Code);
+        Assert.Equal("<html>original</html>", await File.ReadAllTextAsync(Path.Combine(tool.Directory, "index.html")));
+        Assert.Equal("1.0.0", _registry.Find("invalid")!.ActiveVersion);
+    }
+
+    [Fact]
     public async Task CannotDeleteActiveVersion()
     {
         var tool = await CreateToolAsync("nodelete", "1.0.0", "<html>x</html>");

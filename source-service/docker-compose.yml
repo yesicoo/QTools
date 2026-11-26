@@ -1,0 +1,24 @@
+services:
+  qtools-source:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      QTOOLS_SOURCE_ADDR: 0.0.0.0:58088
+      QTOOLS_SOURCE_DATA: /data
+      QTOOLS_SOURCE_SECURE_COOKIE: ${QTOOLS_SOURCE_SECURE_COOKIE:-false}
+    ports:
+      - "127.0.0.1:58088:58088"
+    volumes:
+      - source-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  source-data:

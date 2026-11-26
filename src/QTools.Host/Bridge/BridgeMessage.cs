@@ -110,6 +110,9 @@ public sealed class BridgeContext
     /// <summary>条目导出/导入包服务（manager.exportItem / pickImportFile / importItemPackage 用）。</summary>
     public Backup.ItemPackageService? ItemPackages { get; init; }
 
+    /// <summary>工具源目录、安装更新与提交服务（manager.source* 用）。</summary>
+    public Source.ToolSourceService? SourceService { get; init; }
+
     /// <summary>使用频次统计（列表排序 + 启动/打开计数用）。</summary>
     public Launcher.UsageStore? Usage { get; init; }
 

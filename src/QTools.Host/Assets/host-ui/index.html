@@ -34,6 +34,10 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m0 0L8 8m4-4l4 4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
         导入工具
       </button>
+      <button id="source-tools" class="btn ghost block" type="button" title="浏览、安装和提交工具源中的小工具" hidden>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h10M18 14v6m-3-3h6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+        工具源
+      </button>
       <button id="add-web" class="btn ghost block" type="button" title="录入一个网址，保存为在线工具">
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M3 12h18M12 3c2.6 2.6 4 5.7 4 9s-1.4 6.4-4 9c-2.6-2.6-4-5.7-4-9s1.4-6.4 4-9z" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
         添加网址
@@ -268,6 +272,136 @@
       <div class="row">
         <button id="web-save" class="btn primary" type="button">保存</button>
         <span id="web-status" class="hint"></span>
+      </div>
+    </section>
+
+    <!-- 工具源目录 -->
+    <section id="source-view" class="panel source-page" hidden>
+      <header class="source-head">
+        <div class="source-head-main">
+          <span class="source-head-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h10M18 14v6m-3-3h6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+          </span>
+          <div class="source-heading">
+            <div class="source-heading-row">
+              <h2>工具源</h2>
+              <span id="source-connection" class="source-status" data-state="empty">尚未读取工具源配置。</span>
+            </div>
+            <p>浏览公开目录，直接安装、更新或提交本地小工具。</p>
+          </div>
+        </div>
+        <div class="head-actions source-head-actions">
+          <button id="source-settings" class="btn ghost sm" type="button">源地址设置</button>
+          <button id="source-refresh" class="btn ghost sm" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M6.1 8a7 7 0 0 1 11.7-2L20 8M4 16l2.2 2A7 7 0 0 0 18 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            刷新
+          </button>
+          <button id="source-close" class="btn ghost sm" type="button">关闭</button>
+        </div>
+      </header>
+
+      <div class="source-workspace">
+        <aside class="source-side" aria-label="本地条目提交">
+          <section class="source-submit-card">
+            <div class="source-submit-hero">
+              <span class="source-submit-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M12 16V4m0 0L8 8m4-4 4 4M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </span>
+              <div class="source-submit-heading">
+                <span class="source-kicker">分享与协作</span>
+                <h3>提交到工具源</h3>
+              </div>
+              <span id="source-local-count" class="source-count">0 个</span>
+            </div>
+            <p class="source-side-hint">小工具与在线工具都可提交，导出当前运行版本，经管理员审核后公开。</p>
+            <label class="source-field" for="source-local-tools">
+              <span class="source-field-label">选择条目 <em>小工具 / 在线工具</em></span>
+              <select id="source-local-tools" aria-label="选择要提交的本地条目"></select>
+            </label>
+            <div id="source-pick-preview" class="source-pick-preview" hidden>
+              <span id="source-pick-kind" class="source-pick-kind">小工具</span>
+              <div class="source-pick-main">
+                <b id="source-pick-name"></b>
+                <span id="source-pick-meta"></span>
+              </div>
+            </div>
+            <button id="source-submit-local" class="btn primary block source-submit-button" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m0 0L8 8m4-4l4 4M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              提交审核
+            </button>
+            <p id="source-submit-status" class="source-side-status" aria-live="polite"></p>
+          </section>
+
+          <section class="source-side-note">
+            <h3>提交说明</h3>
+            <ul>
+              <li>只导当前运行版本，不含历史版本</li>
+              <li>不含用户数据、API Key 与本地配置</li>
+              <li>审核通过前仍可正常本地使用</li>
+            </ul>
+          </section>
+        </aside>
+
+        <section class="source-content">
+          <div id="source-catalog">
+            <div id="source-toolbar" class="source-toolbar">
+              <label class="source-search" for="source-search">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="m16 16 4 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+                <input id="source-search" type="search" maxlength="120" placeholder="搜索工具名称、描述或分类…" autocomplete="off">
+              </label>
+              <select id="source-category" aria-label="工具分类"><option value="">全部分类</option></select>
+            </div>
+            <div id="source-results-meta" class="source-results-meta">
+              <span id="source-page">第 1 页</span>
+              <span>公开目录 · 安装前自动校验</span>
+            </div>
+            <div id="source-grid" class="source-grid"></div>
+            <div class="row source-pagination" id="source-pagination">
+              <button id="source-prev" class="btn ghost sm" type="button">上一页</button>
+              <button id="source-next" class="btn ghost sm" type="button">下一页</button>
+            </div>
+          </div>
+
+          <article id="source-detail" class="source-detail-page" hidden>
+            <div class="source-detail-top">
+              <button id="source-detail-back" class="btn ghost sm" type="button">← 返回目录</button>
+              <span id="source-detail-version-badge" class="badge ver">v—</span>
+            </div>
+            <div class="source-detail-hero">
+              <div id="source-detail-glyph" class="source-detail-glyph">◇</div>
+              <div class="source-detail-heading">
+                <h2 id="source-detail-title">工具详情</h2>
+                <p id="source-detail-description" class="hint"></p>
+              </div>
+            </div>
+            <div class="source-detail-grid">
+              <section class="source-detail-card">
+                <h3>版本与安装</h3>
+                <label class="source-field" for="source-version">安装版本
+                  <select id="source-version"></select>
+                </label>
+                <div class="source-detail-actions">
+                  <button id="source-detail-install" class="btn primary" type="button">直接安装 / 更新</button>
+                  <button id="source-detail-preview" class="btn ghost" type="button">沙箱预览</button>
+                  <button id="source-detail-download" class="btn ghost" type="button">下载 .qtools</button>
+                  <button id="source-detail-submit" class="btn ghost" type="button" hidden>提交当前版本</button>
+                </div>
+                <p id="source-detail-status" class="source-side-status" aria-live="polite"></p>
+                <div class="source-install-note">安装前会再次校验包大小、SHA256、manifest 和实际解压长度；高危内容需要你确认。</div>
+              </section>
+              <section class="source-detail-info-card">
+                <h3>工具信息</h3>
+                <dl id="source-detail-meta" class="info"></dl>
+              </section>
+            </div>
+            <div id="source-review" class="warnbox source-review" hidden>
+              <h3>本地安全审查</h3>
+              <ul id="source-findings" class="findings"></ul>
+              <p id="source-external-assets" hidden></p>
+              <label class="check"><input id="source-accept" type="checkbox"> 我已审查上述风险，确认安装</label>
+            </div>
+          </article>
+        </section>
       </div>
     </section>
 

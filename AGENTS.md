@@ -38,7 +38,7 @@
 # 构建（Debug，够日常开发）
 dotnet build
 
-# 单元测试（当前基线 486 个）
+# 单元测试（当前基线 566 个：桌面端 530 + 源站 36）
 dotnet test
 
 # 开发运行（会开 GUI 窗口）
@@ -428,6 +428,16 @@ Host 头只接受 `127.0.0.1:{port}` / `localhost:{port}`。**路由必须集中
 工具静态文件的七条穿越防护保留在 `ToolStaticFiles`；HTML 注入只在 `LocalServer.TransformHtml` 统一完成。
 新增 HTTP 端点必须同步 `SelfTest`。**不要重新引入 ASP.NET Core/Kestrel**——会失去体积收益并扩大攻击面。
 
+### 7.29 工具源安装、下载与提交必须宿主直达
+
+桌面端工具源不要求用户先去浏览器下载再导入：`manager.sourceInstall` 直接下载、校验、审查并安装/更新；
+`manager.sourceDownload` 通过原生保存对话框把校验后的 `.qtools` 保存到用户选择的位置；`manager.sourceSubmit`
+直接导出本地当前运行版本并上传审核。三个方法都必须保持 `hostOnly: true`。
+
+**约束**：安装与下载共用包身份/版本及 ZIP 白名单校验，并分别核对 SHA256 与大小；下载只保存安装包，不写入
+`tools/{id}`，临时文件必须清理，不能把未校验内容移动到最终位置。提交只导当前运行版本，不带 `.versions/`。
+源站在线预览不挂载本地宿主桥接，不能用 `sourcePreview` 绕过沙箱边界。
+
 ---
 
 ## 8. 平台事实（不要假装全平台都是 WebKit）
@@ -473,8 +483,8 @@ Host 头只接受 `127.0.0.1:{port}` / `localhost:{port}`。**路由必须集中
 5. **PowerShell 里 `"$(id)"` 会被当子表达式求值**。生成含 `$(...)` 的代码时用编辑工具写文件，别用字符串拼接。
 
 **测试分层**：
-- `dotnet test`：纯单元 + 内存级集成（真实 `BridgeDispatcher.DispatchAsync` + 临时目录）。当前 486 个（含内嵌凭证、索引程序隐藏、拼音首字母/全拼检索、备份/Git、流式取消链路、索引原子覆盖、内容窗口初始定位、在线工具、浮层菜单定位、小工具/在线工具重命名、统一属性字段、托盘菜单规划与弹层定位、主窗口/内容窗口/设置窗口/工具窗口几何记忆、AI 端点识别与双协议流式、使用次数播种、窗口置顶/钉住、桌面快捷方式、列表置顶排序、条目导出包往返/安全边界、主题规范化/HTML 注入/桥接持久化、通知校验与单实例消息、工具页主题标记）。
-- `node --test tests/*.cjs`：前端行为级测试（vm 沙箱 + DOM shim，跑 `app.js`/`bridge.js`/示例工具页面）。当前 154 个（含 theme.js / tool-theme.js 实时换肤、右键版本管理）。注意：vm 沙箱里创建的对象带另一套原型，断言前先用 `JSON.parse(JSON.stringify(...))` 归一化。
+- `dotnet test`：纯单元 + 内存级集成（真实 `BridgeDispatcher.DispatchAsync` + 临时目录）。当前 566 个，其中桌面端 530、源站 36（含内嵌凭证、索引程序隐藏、拼音首字母/全拼检索、备份/Git、流式取消链路、索引原子覆盖、内容窗口初始定位、在线工具、浮层菜单定位、小工具/在线工具重命名、统一属性字段、托盘菜单规划与弹层定位、主窗口/内容窗口/设置窗口/工具窗口几何记忆、AI 端点识别与双协议流式、使用次数播种、窗口置顶/钉住、桌面快捷方式、列表置顶排序、条目导出包往返/安全边界、主题规范化/HTML 注入/桥接持久化、通知校验与单实例消息、工具页主题标记、多文件版本快照与回滚、工具源直接安装/下载/提交、在线工具源安装/提交；源站含启动配置优先级、默认密码、首页入口与下载链接、描述分类编辑与置顶、下载计数与排行、在线工具提交审核与同版本替换）。
+- `node --test tests/*.cjs`：前端行为级测试（vm 沙箱 + DOM shim，跑 `app.js`/`bridge.js`/示例工具页面）。当前 174 个（含 theme.js / tool-theme.js 实时换肤、右键版本管理、工具源下载保存、在线工具提交与右键上传、入口可见性与异步状态隔离）。注意：vm 沙箱里创建的对象带另一套原型，断言前先用 `JSON.parse(JSON.stringify(...))` 归一化。
 - `--self-test`：真起本地 HTTP 服务，27 项 HTTP 断言（host 头校验、路径穿越、工具资源、设置页、品牌图标；其中工具资源每工具 3 项，数量随已装工具数浮动）。
 - ad-hoc 验收脚本：**不入库**，历史脚本在 `%TEMP%`。GUI 真机验证可用 WebView2 远程调试：启动时设 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=<port> --remote-debugging-address=127.0.0.1`，再用 CDP（`/json/list` + WebSocket）注入 JS / 截图；日志断言（`-> ok`、`已打开...窗口`）仍是最轻量的手段。
 
@@ -483,7 +493,7 @@ Host 头只接受 `127.0.0.1:{port}` / `localhost:{port}`。**路由必须集中
 ## 11. 提交前检查清单
 
 - [ ] `dotnet build` → 0 error / 0 warning
-- [ ] `dotnet test` → 全绿（当前基线 **486**）
+- [ ] `dotnet test` → 全绿（当前基线 **563**）
 - [ ] `node --test tests/app.test.cjs` → 全绿（改过 `app.js` 时必须跑）
 - [ ] `--self-test` → **27 PASS / 0 FAIL**，退出码 0
 - [ ] `dotnet publish -c Release` → **0 AOT warning**

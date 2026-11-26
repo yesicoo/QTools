@@ -18,3 +18,9 @@ artifacts/
 # 日志与临时文件
 *.log
 *.tmp
+
+# 工具源本地配置与构建产物
+source-service/.env
+source-service/source-config.json
+source-service/qtools-source
+source-service/qtools-source.exe

@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>提交工具 · QTools 工具源</title>
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body class="submit-page">
+  <header class="site-header">
+    <div class="container header-inner">
+      <a class="brand" href="/"><span class="brand-mark">Q</span><span>QTools 工具源</span></a>
+      <nav class="nav" aria-label="主导航"><a href="/">返回目录</a></nav>
+    </div>
+  </header>
+
+  <main class="container submit-container">
+    <section class="submit-hero">
+      <span class="eyebrow"><span class="eyebrow-dot"></span>本地工具 · 新版本提交</span>
+      <h1>把小工具带到工具源</h1>
+      <p>上传从 QTools 导出的当前版本安装包。新工具与修订版本都会先进入审核队列，通过后才会出现在公开目录。</p>
+    </section>
+
+    <div class="submit-layout">
+      <section class="panel submit-panel">
+        <div class="panel-heading">
+          <div><h2>上传安装包</h2><p>支持 .qtools / .zip，单包不超过 8 MiB</p></div>
+          <span class="step-badge">第 1 步 / 共 2 步</span>
+        </div>
+
+        <div id="error" class="error-box hidden" role="alert"></div>
+        <form id="submit-form" class="submit-form" novalidate>
+          <label id="upload" class="upload" for="package">
+            <span class="upload-icon">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m0 0L8 8m4-4l4 4M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </span>
+            <strong>拖放安装包到这里</strong>
+            <span>或者 <em>点击选择本地文件</em></span>
+            <small>.qtools / .zip · 最大 8 MiB</small>
+            <input id="package" name="package" type="file" accept=".qtools,.zip" required>
+          </label>
+
+          <div id="file-info" class="file-info hidden" aria-live="polite">
+            <span class="file-type">ZIP</span>
+            <div class="file-copy">
+              <strong id="file-name"></strong>
+              <span id="file-size"></span>
+              <span id="file-state">等待提交</span>
+            </div>
+            <button id="replace-file" class="icon-button" type="button" title="重新选择">重新选择</button>
+            <button id="remove-file" class="icon-button icon-only" type="button" title="移除文件" aria-label="移除文件">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 7 10 10M17 7 7 17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+            </button>
+          </div>
+          <p id="file-error" class="field-error hidden" role="alert"></p>
+
+          <label class="consent-check" for="consent">
+            <input id="consent" type="checkbox" required>
+            <span>我确认该工具的代码与元数据可以公开，并了解提交后需要等待管理员审核。</span>
+          </label>
+
+          <div class="submit-actions">
+            <button id="submit-button" class="button primary" type="submit" disabled>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m0 0L8 8m4-4l4 4M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              提交审核
+            </button>
+            <a class="button" href="/">取消</a>
+          </div>
+        </form>
+
+        <div id="success" class="success-state hidden" aria-live="polite">
+          <span class="success-icon">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 12 4 4 8-9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </span>
+          <span class="eyebrow">提交成功</span>
+          <h2>已进入审核队列</h2>
+          <p>管理员完成审核后，工具会出现在公开目录；你可以在审核状态页查看进度。</p>
+          <div class="submission-id">
+            <span>提交编号</span>
+            <code id="submission-id"></code>
+            <button id="copy-id" class="text-button" type="button">复制</button>
+          </div>
+          <div class="success-actions">
+            <a id="status-link" class="button primary" href="#">查看审核状态</a>
+            <a class="button" href="/submit">继续提交</a>
+          </div>
+        </div>
+      </section>
+
+      <aside class="submit-aside">
+        <section class="side-card checklist-card">
+          <h2>提交前检查</h2>
+          <ul class="check-list">
+            <li>从 QTools 导出的 <strong>.qtools</strong> 安装包</li>
+            <li>只包含当前运行版本，不含历史快照与用户数据</li>
+            <li>工具名称、描述、分类和图标已填写完整</li>
+            <li>代码和元数据可以公开，且不包含密钥等敏感信息</li>
+          </ul>
+        </section>
+
+        <section class="side-card recommend-card">
+          <span class="recommend-icon">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0-4-4m4 4 4-4M5 15v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </span>
+          <h2>更推荐：在 QTools 中直接提交</h2>
+          <p>打开 QTools 的工具源面板，选择本地小工具即可直接上传，无需先下载安装包再打开浏览器。</p>
+          <span class="badge ok">操作更少 · 自动导出当前版本</span>
+        </section>
+      </aside>
+    </div>
+  </main>
+
+  <footer class="site-footer"><div class="container">QTools 工具源 · 提交内容仅用于工具审核与公开发布</div></footer>
+  <script src="/assets/site.js"></script>
+  <script src="/assets/submit.js"></script>
+</body>
+</html>

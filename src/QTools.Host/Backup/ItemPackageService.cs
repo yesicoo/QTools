@@ -6,6 +6,7 @@ using QTools.Host.Creator;
 using QTools.Host.Launcher;
 using QTools.Host.Logging;
 using QTools.Host.Serialization;
+using QTools.Host.Source;
 using QTools.Host.Tools;
 
 namespace QTools.Host.Backup;
@@ -66,6 +67,7 @@ public sealed class ItemPackageService
     private const long MaxPackageBytes = 64L * 1024 * 1024;
     private const long MaxEntryBytes = 16L * 1024 * 1024;
     private const int MaxEntries = 2000;
+    private const int MaxManifestBytes = 64 * 1024;
 
     private readonly ToolRegistry _tools;
     private readonly ToolImporter _importer;
@@ -115,7 +117,14 @@ public sealed class ItemPackageService
     }
 
     /// <summary>把一个条目导出到用户选定的路径（只含当前运行版本）。</summary>
-    public ItemExportResult Export(string kind, string id, string targetPath)
+    public ItemExportResult Export(string kind, string id, string targetPath) =>
+        ExportCore(kind, id, targetPath, excludeUserData: false);
+
+    /// <summary>导出供源站审核的条目包（小工具 / 在线工具），排除录音、图片等用户数据。</summary>
+    public ItemExportResult ExportForSource(string kind, string id, string targetPath) =>
+        ExportCore(kind, id, targetPath, excludeUserData: true);
+
+    private ItemExportResult ExportCore(string kind, string id, string targetPath, bool excludeUserData)
     {
         var item = ResolveItem(kind, id);
         if (string.IsNullOrWhiteSpace(targetPath))
@@ -137,7 +146,7 @@ public sealed class ItemPackageService
         };
 
         IEnumerable<(string Relative, string Full)> files = kind == LauncherListBuilder.KindTool
-            ? EnumerateToolFiles(item.Directory).Select(f => (prefix + f, Path.Combine(item.Directory, f)))
+            ? EnumerateToolFiles(item.Directory, excludeUserData).Select(f => (prefix + f, Path.Combine(item.Directory, f)))
             : new[] { (prefix + item.FileName, Path.Combine(item.Directory, item.FileName)) };
 
         var manifest = new ItemExportManifest(
@@ -233,8 +242,33 @@ public sealed class ItemPackageService
                 return null;
             }
 
-            using var reader = new StreamReader(entry.Open(), Encoding.UTF8);
-            return JsonSerializer.Deserialize(reader.ReadToEnd(), AppJsonContext.Default.ItemExportManifest);
+            if (entry.Length > MaxManifestBytes)
+            {
+                throw new InvalidDataException("导出包清单超过 64 KiB");
+            }
+
+            using var source = entry.Open();
+            using var content = new MemoryStream();
+            var buffer = new byte[8192];
+            int read;
+            while ((read = source.Read(buffer, 0, buffer.Length)) > 0)
+            {
+                if (content.Length + read > MaxManifestBytes)
+                {
+                    throw new InvalidDataException("导出包清单超过 64 KiB");
+                }
+
+                content.Write(buffer, 0, read);
+            }
+
+            if (content.Length != entry.Length)
+            {
+                throw new InvalidDataException("导出包清单实际解压长度与中央目录不一致");
+            }
+
+            return JsonSerializer.Deserialize(
+                content.GetBuffer().AsSpan(0, (int)content.Length),
+                AppJsonContext.Default.ItemExportManifest);
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException or JsonException)
         {
@@ -291,6 +325,7 @@ public sealed class ItemPackageService
         {
             Directory.CreateDirectory(stagedTool);
             var extracted = 0;
+            long extractedBytes = 0;
             using (var archive = ZipFile.OpenRead(path))
             {
                 foreach (var entry in archive.Entries)
@@ -303,7 +338,29 @@ public sealed class ItemPackageService
 
                     var destination = Path.Combine(stagedTool, relative[prefix.Length..].Replace('/', Path.DirectorySeparatorChar));
                     Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-                    entry.ExtractToFile(destination, overwrite: true);
+                    await using var output = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None,
+                        81920, useAsync: true);
+                    await using var source = entry.Open();
+                    var buffer = new byte[81920];
+                    long entryBytes = 0;
+                    int read;
+                    while ((read = await source.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) > 0)
+                    {
+                        entryBytes += read;
+                        extractedBytes += read;
+                        if (entryBytes > MaxEntryBytes || extractedBytes > MaxPackageBytes)
+                        {
+                            throw new BridgeException("IMPORT_PACKAGE_TOO_LARGE", "导出包实际解压后体积过大");
+                        }
+
+                        await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
+                    }
+
+                    if (entryBytes != entry.Length)
+                    {
+                        throw new BridgeException("IMPORT_PACKAGE_INVALID", "导出包条目实际解压长度与记录不一致");
+                    }
+
                     extracted += 1;
                 }
             }
@@ -465,20 +522,22 @@ public sealed class ItemPackageService
             case LauncherListBuilder.KindWeb:
                 var web = _webTools.Find(id)
                     ?? throw new BridgeException("WEB_NOT_FOUND", $"未找到在线工具 '{id}'");
-                return (web.Name, null, web.Directory, "web.json");
+                return (web.Name, web.Entry.Version, web.Directory, "web.json");
 
             default:
                 throw new BridgeException("EXPORT_KIND_INVALID", "本机程序不支持导出（请导出小工具 / 启动项 / 在线工具）");
         }
     }
 
-    /// <summary>工具目录内的全部文件（相对路径，'/' 分隔）；跳过点号前缀目录，绝不带上 .versions 历史。</summary>
-    private static IEnumerable<string> EnumerateToolFiles(string toolDirectory)
+    /// <summary>工具目录内的代码与静态资源；跳过点号前缀目录，源站提交还排除 files 用户数据。</summary>
+    private static IEnumerable<string> EnumerateToolFiles(string toolDirectory, bool excludeUserData)
     {
         foreach (var file in Directory.EnumerateFiles(toolDirectory, "*", SearchOption.AllDirectories))
         {
             var relative = Path.GetRelativePath(toolDirectory, file).Replace(Path.DirectorySeparatorChar, '/');
-            if (relative.Split('/').Any(segment => segment.StartsWith('.')))
+            var segments = relative.Split('/');
+            if (segments.Any(segment => segment.StartsWith('.')) ||
+                (excludeUserData && segments[0].Equals("files", StringComparison.OrdinalIgnoreCase)))
             {
                 continue;
             }
@@ -503,6 +562,11 @@ public sealed class ItemPackageService
     /// <summary>白名单 + 防穿越 + 体积上限：只允许清单与三类条目目录，拒绝点号前缀段（.versions）。</summary>
     internal static void ValidateArchive(string path)
     {
+        if (new FileInfo(path).Length > MaxPackageBytes)
+        {
+            throw new BridgeException("IMPORT_PACKAGE_TOO_LARGE", $"导出包不超过 {MaxPackageBytes / 1024 / 1024} MB");
+        }
+
         try
         {
             using var archive = ZipFile.OpenRead(path);
@@ -516,9 +580,14 @@ public sealed class ItemPackageService
                 throw new BridgeException("IMPORT_PACKAGE_INVALID", $"导出包条目过多（上限 {MaxEntries}）");
             }
 
-            long total = 0;
+            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var entry in archive.Entries)
             {
+                if (!names.Add(entry.FullName))
+                {
+                    throw new BridgeException("IMPORT_PACKAGE_INVALID", $"导出包包含重复条目：{entry.FullName}");
+                }
+
                 if (!IsAllowedEntry(entry.FullName))
                 {
                     throw new BridgeException("IMPORT_PACKAGE_INVALID", $"导出包含非法路径条目：{entry.FullName}");
@@ -528,13 +597,9 @@ public sealed class ItemPackageService
                 {
                     throw new BridgeException("IMPORT_PACKAGE_INVALID", $"导出包内单个文件过大：{entry.FullName}");
                 }
-
-                total += entry.Length;
-                if (total > MaxPackageBytes)
-                {
-                    throw new BridgeException("IMPORT_PACKAGE_INVALID", "导出包解压后体积过大");
-                }
             }
+
+            SourcePackageExtractor.ValidatePackage(path);
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException)
         {

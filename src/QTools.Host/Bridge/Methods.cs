@@ -1359,9 +1359,9 @@ internal static class ShellMethods
     public static async System.Threading.Tasks.Task<JsonElement> OpenContentAsync(BridgeContext context)
     {
         var view = PayloadReader.ReadStringPayload(context.Payload, "view", required: true, maxLength: 20);
-        if (view is not ("tool" or "version" or "create" or "import" or "web"))
+        if (view is not ("tool" or "version" or "create" or "import" or "web" or "source"))
         {
-            throw new BridgeException("BRIDGE_BAD_REQUEST", "view 必须是 tool / version / create / import / web");
+            throw new BridgeException("BRIDGE_BAD_REQUEST", "view 必须是 tool / version / create / import / web / source");
         }
 
         string? toolId = null;

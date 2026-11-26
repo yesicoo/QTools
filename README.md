@@ -9,6 +9,7 @@
 - **小工具宿主**：托管纯静态 HTML/CSS/JS 小工具，本地轻量 HTTP 服务 + 系统 WebView 打开，通过注入的 `window.host` 垫层向页面提供 **AI / 存储 / 二进制文件 / 硬件捕获**能力——**API Key 只存在于宿主侧，页面永远拿不到**。
 - **AI 工具工厂**：用一句自然语言生成完整小工具（流式输出、可取消），可对已有工具「AI 优化更新」，带版本管理与一键回滚；生成内容经静态安全审查，高危项需你显式确认。
 - **备份与恢复**：一键 zip 备份 / 恢复 / 导入，也可推送到你自己的 Git 远程仓库做版本化备份。
+- **小工具源（.NET 主分支）**：设置兼容源地址后浏览公开目录、隔离沙箱预览、直接安装/更新、下载 `.qtools` 安装包，也可把本地工具的当前版本直接提交审核；源站支持管理后台、历史版本、下架与重新发布。
 
 完整设计（架构、威胁模型、桥接协议、里程碑记录）见 [docs/01-方案A-设计.md](docs/01-方案A-设计.md)。
 
@@ -112,6 +113,19 @@ Windows 下需要 [WebView2 Runtime（Evergreen）](https://developer.microsoft.
 - **右键浮层菜单**：右键任意条目，在鼠标处弹出「详情 / 属性 / 重命名（小工具、在线工具）/ 置顶（小工具）/ 导出 / 删除（移除 / 隐藏）」浮层菜单，不遮挡也不撑大列表；一次只开一个，点别处、滚动列表或按 Esc 收起。详情展示名称、目标、使用次数等；「属性」在资源管理器中定位文件；小工具与在线工具的「重命名」只改显示名（小工具的 id / 目录 / 版本不变，在线工具的 id / 网址 / 目录不变）；小工具「置顶」后固定在列表最前（只影响排序，与窗口置顶无关）；索引程序的「隐藏」持久化（`data/hidden-programs.json`），重新索引也不会再出现，且不会改动程序本身。
 - **条目导出 / 导入**：小工具、手动启动项、在线工具右键「导出」可保存为 `.qtools` 导出包（小工具导出**当前运行版本**，不含历史版本）；导入页选择文件时会自动识别 HTML 与 `.qtools`——导出包还原名称 / 版本 / 图标等元数据，小工具仍走同一套安全审查（高危项需确认）。整机备份包（zip）请在设置的备份页导入。
 
+## 小工具源站与同步
+
+仓库内的 [`source-service/`](source-service/) 是独立的 **.NET 10 服务**，自研 TCP HTTP、无 ASP.NET Core/Kestrel、无第三方运行库，可发布为 Native AOT 单文件或框架依赖版本，也可用 Docker Compose 快速部署。它提供公开目录、搜索/分类/分页、工具详情、历史版本、SHA256 下载、提交审核、管理后台、下架/重新发布和隔离沙箱预览；小工具与「添加网址」创建的在线工具都可提交分享（在线工具在目录中标记并直达网址，不做沙箱预览）。完整部署与 API 说明见 [源站 README](source-service/README.md)。
+
+桌面端目前由 **.NET 主分支**接入：
+
+1. 部署源站并设置强管理员密码，审核通过至少一个工具。
+2. 打开 QTools → 设置 → 工具源，填写源地址（例如 `http://127.0.0.1:58088`），保存并测试连接。
+3. 主窗口 → 工具源，浏览目录、选择历史版本、沙箱预览、直接安装/更新；需要离线保存或分享时可“下载 .qtools”，由原生对话框选择保存位置。
+4. 在工具源右侧选择小工具或在线工具提交（也可在列表右键「上传到工具源」），QTools 直接导出当前运行版本并上传审核，无需打开浏览器。
+
+安装与下载都会再次校验包大小、SHA256、manifest / web.json、工具身份、ZIP 结构和实际解压长度；安装还会执行本地安全风险审查，高危项需显式确认，同版本或更高本地版本不会覆盖。更新保留 `files/` 用户数据与 `.versions/` 历史，并建立完整回滚副本；在线工具只写入网址条目，不落网页代码。在线预览窗口不挂载本地宿主桥接，工具运行在源站的 `allow-scripts` 沙箱中。Rust / Go 桌面移植分支尚未接入工具源同步。
+
 ## AI 创建工具
 
 主窗口点「AI 创建工具」→ 输入需求（如「做一个录音机，能录音、保存 webm、回放历史」）→ 流式生成 → 审查安全报告 → 保存并打开。
@@ -191,11 +205,15 @@ dotnet run --project src/QTools.Host -r win-x64
 # 无头自检：起真实本地 HTTP 服务，27 项 HTTP 断言，退出码 0 = 全过
 dotnet run --project src/QTools.Host -r win-x64 -- --self-test
 
-dotnet test                      # 486 个单元/集成测试
-node --test tests/*.cjs          # 154 个前端行为级测试（vm 沙箱 + DOM shim）
+dotnet test                      # 566 个桌面端与源站单元/集成测试
+node --test tests/*.cjs          # 174 个前端行为级测试（vm 沙箱 + DOM shim）
+dotnet test tests/QTools.Source.Tests/QTools.Source.Tests.csproj # 36 项源站集成测试
 
-# Native AOT 单文件发布（用户实际运行的形态）
+# 桌面端 Native AOT 单文件发布（用户实际运行的形态）
 dotnet publish src/QTools.Host/QTools.Host.csproj -c Release -r win-x64 -o publish/win-x64
+
+# 源站 Native AOT 单文件发布（Windows / Linux / macOS 可替换 RID）
+dotnet publish source-service/QTools.Source.csproj -c Release -r win-x64 -o publish/source/win-x64
 ```
 
 发布产物是**单个 exe**：内置轻量 HTTP 服务 + PhotinoX + 全部前端资源全部内嵌，PhotinoX 原生库首次运行解压到数据目录并经 `DllImportResolver` 加载——「只拷一个 exe 到空目录」即可完整运行。
@@ -285,8 +303,9 @@ dotnet publish src/QTools.Host/QTools.Host.csproj -c Release -r win-x64 -o publi
 
 | 层 | 命令 | 数量 | 覆盖 |
 |---|---|---|---|
-| 单元/集成 | `dotnet test` | 412 | manifest 校验、桥接协议（真实 `BridgeDispatcher`）、权限、存储隔离、AI 解析容错、安全审查、备份/Git、索引原子覆盖与去重、流式取消 |
-| 前端行为 | `node --test tests/*.cjs` | 129 | `app.js` / `bridge.js` / 示例工具页面（vm 沙箱 + DOM shim） |
+| 单元/集成 | `dotnet test` | 566 | 桌面端 530 项：manifest 校验、桥接协议（真实 `BridgeDispatcher`）、权限、存储隔离、AI 解析容错、安全审查、备份/Git、索引原子覆盖与去重、流式取消、多文件版本快照、工具源安装/下载/提交、在线工具源安装与提交；源站 36 项 |
+| 前端行为 | `node --test tests/*.cjs` | 174 | `app.js` / `bridge.js` / 示例工具页面（vm 沙箱 + DOM shim）、工具源入口可见性/目录/预览/安装确认/下载保存/提交、在线工具提交与右键上传 |
+| 源站集成 | `dotnet test tests/QTools.Source.Tests/QTools.Source.Tests.csproj` | 36 | 提交审核、历史版本、下载哈希、沙箱预览、下架、恶意路径/ZIP、认证限流、Secure Cookie、数据目录迁移、SemVer、启动配置优先级、默认密码、相对路径解析、描述分类编辑与置顶、下载计数与排行、在线工具提交审核与同版本替换、首页入口与下载链接、真实 HTTP |
 | HTTP 自检 | `--self-test` | 27 | 真起本地 HTTP 服务：Host 校验、路径穿越、工具资源、设置页、品牌图标 |
 
 ## 已知 AOT 约束
@@ -323,11 +342,14 @@ src/QTools.Host/
 ├── Security/               DPAPI / AES-GCM 密钥存储
 ├── Shell/                  窗口生命周期 / 窗口↔工具绑定 / 全局热键 / 系统托盘
 ├── Storage/                按 toolId 隔离的 JSON 键值存储
+├── Source/                 工具源客户端 / 安装更新 / 回滚 / 当前版本提交
 ├── Text/                   拼音检索键（静态汉字→拼音表：首字母 + 全拼 + 多音字变体）
 ├── Tools/                  manifest 校验 / 版本管理 / 扫描 / 示例工具释放
 └── Assets/host-ui/         主窗口与设置页（原生 HTML/CSS/JS，无框架无构建）
-tests/QTools.Tests/         412 个单元 + 内存级集成测试
-tests/*.test.cjs            129 个前端行为级测试
+source-service/            .NET 10 工具源站（AOT 单文件 / 框架依赖，内嵌页面 / 审核后台 / 沙箱预览 / JSON 持久化）
+tests/QTools.Tests/         530 个桌面端单元 + 内存级集成测试
+tests/QTools.Source.Tests/  36 个源站集成测试
+tests/*.test.cjs            174 个前端行为级测试
 ```
 
 ## 给开发者
